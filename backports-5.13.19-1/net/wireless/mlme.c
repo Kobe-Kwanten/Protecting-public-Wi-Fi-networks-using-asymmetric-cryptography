@@ -338,6 +338,15 @@ int cfg80211_mlme_assoc(struct cfg80211_registered_device *rdev,
 	if (!req->bss)
 		return -ENOENT;
 
+//#ifdef CONFIG_PREAUTH_ATTACKS
+
+	if(req->sae_pk_pub){
+		req->bss->sae_pk_pub = req->sae_pk_pub;
+		req->bss->sae_pk_pub_len = req->sae_pk_pub_len;
+	}
+
+//#endif /* CONFIG_PREAUTH_ATTACKS*/
+
 	err = rdev_assoc(rdev, dev, req);
 	if (!err)
 		cfg80211_hold_bss(bss_from_pub(req->bss));
@@ -968,3 +977,18 @@ void cfg80211_cac_event(struct net_device *netdev,
 	nl80211_radar_notify(rdev, chandef, event, netdev, gfp);
 }
 EXPORT_SYMBOL(cfg80211_cac_event);
+
+
+//#ifdef CONFIG_PREAUTH_ATTACKS
+
+u64 cfg80211_get_beacon_cntr(struct cfg80211_registered_device *rdev, struct net_device *dev) 
+{
+    return rdev_get_beacon_cntr(rdev, dev);
+}
+
+void cfg80211_set_beacon_cntr(struct cfg80211_registered_device *rdev, struct net_device *dev, u64 cntr) 
+{
+    rdev_set_beacon_cntr(rdev, dev,cntr);
+}
+
+//#endif /*CONFIG_PREAUTH_ATTACKS*/

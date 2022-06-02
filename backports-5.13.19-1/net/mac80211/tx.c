@@ -4691,6 +4691,8 @@ bool ieee80211_beacon_cntdwn_is_complete(struct ieee80211_vif *vif)
 	size_t beacon_data_len;
 	int ret = false;
 
+    printk(KERN_DEBUG "DEBUG: Entered ieee80211_beacon_cntdwn_is_complete in tx.c \n");
+    printk(KERN_DEBUG "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
 	if (!ieee80211_sdata_running(sdata))
 		return false;
 

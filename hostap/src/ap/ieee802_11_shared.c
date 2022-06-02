@@ -558,6 +558,30 @@ u8 * hostapd_eid_adv_proto(struct hostapd_data *hapd, u8 *eid)
 	return pos;
 }
 
+u8 *hostapd_eid_fils_pub_key(u8 *pos, const struct wpabuf *pubkey) {
+	size_t public_key_length = wpabuf_len(pubkey);
+	/* FILS Public Key element */
+	*pos++ = WLAN_EID_EXTENSION;                                                /* Element ID */
+	*pos++ = 2 + public_key_length;                                             /* Length */
+	*pos++ = WLAN_EID_EXT_FILS_PUBLIC_KEY;                                      /* Extended ID */
+	*pos++ = 2;                                                                 /* Key Type: ECDSA public key */
+	os_memcpy(pos, wpabuf_head(pubkey), public_key_length); /* Public key */
+	pos += public_key_length;
+	return pos;
+}
+
+u8 *hostapd_eid_custom_sae_pk(u8 *pos, struct wpabuf *m) {
+	size_t m_length = wpabuf_len(m);
+	/* Modified SAE-PK Element */
+	*pos++ = WLAN_EID_VENDOR_SPECIFIC;          /* Element ID */
+	*pos++ = 4 + m_length;                      /* Length */
+	*((be32*) pos) = SAE_PK_IE_VENDOR_TYPE;     /* Vendor type */
+	pos += 4;
+	memcpy(pos, wpabuf_head(m),m_length);       /* unencrypted modfier */
+	pos += m_length;
+	return pos;
+}
+
 
 u8 * hostapd_eid_roaming_consortium(struct hostapd_data *hapd, u8 *eid)
 {

@@ -356,69 +356,73 @@ static void sae_pk_buf_shift_left_1(u8 *buf, size_t len)
 }
 
 
+int sae_pk_set_password_h(struct sae_temporary_data *tmp, const char *password) {
+    size_t len, pw_len;
+    u8 *pw, *pos;
+    int bits;
+    u32 val = 0, val19;
+    unsigned int val_bits = 0;
+
+    if (!tmp)
+        return -1;
+
+    os_memset(tmp->fingerprint, 0, sizeof(tmp->fingerprint));
+    tmp->fingerprint_bytes = tmp->fingerprint_bits = 0;
+
+    len = os_strlen(password);
+    if (len < 1 || !sae_pk_valid_password(password))
+        return -1;
+
+    pw = sae_pk_base32_decode(password, len, &pw_len);
+    if (!pw)
+        return -1;
+
+    tmp->sec = (pw[0] & BIT(7)) ? 3 : 5;
+    tmp->lambda = len - len / 5;
+    tmp->fingerprint_bits = 8 * tmp->sec + 19 * tmp->lambda / 4 - 5;
+    wpa_printf(MSG_DEBUG, "SAE-PK: Sec=%u Lambda=%zu fingerprint_bits=%zu",
+           tmp->sec, tmp->lambda, tmp->fingerprint_bits);
+
+    /* Construct Fingerprint from PasswordBase by prefixing with Sec zero
+* octets and skipping the Sec_1b bits */
+    pos = &tmp->fingerprint[tmp->sec];
+    bits = tmp->fingerprint_bits - 8 * tmp->sec;
+    wpa_hexdump_key(MSG_DEBUG, "SAE-PK: PasswordBase", pw, pw_len);
+    while (bits > 0) {
+        if (val_bits < 8) {
+            sae_pk_buf_shift_left_1(pw, pw_len); /* Sec_1b */
+            val19 = sae_pk_get_be19(pw);
+            sae_pk_buf_shift_left_19(pw, pw_len);
+            val = (val << 19) | val19;
+            val_bits += 19;
+        }
+        if (val_bits >= 8) {
+            if (bits < 8)
+                break;
+            *pos++ = (val >> (val_bits - 8)) & 0xff;
+            val_bits -= 8;
+            bits -= 8;
+        }
+    }
+    if (bits > 0) {
+        val >>= val_bits - bits;
+        *pos++ = val << (8 - bits);
+    }
+    tmp->fingerprint_bytes = pos - tmp->fingerprint;
+    wpa_hexdump_key(MSG_DEBUG, "SAE-PK: Fingerprint",
+            tmp->fingerprint, tmp->fingerprint_bytes);
+    bin_clear_free(pw, pw_len);
+    return 0;
+}
+
 int sae_pk_set_password(struct sae_data *sae, const char *password)
 {
-	struct sae_temporary_data *tmp = sae->tmp;
-	size_t len, pw_len;
-	u8 *pw, *pos;
-	int bits;
-	u32 val = 0, val19;
-	unsigned int val_bits = 0;
-
-	if (!tmp)
-		return -1;
-
-	os_memset(tmp->fingerprint, 0, sizeof(tmp->fingerprint));
-	tmp->fingerprint_bytes = tmp->fingerprint_bits = 0;
-
-	len = os_strlen(password);
-	if (len < 1 || !sae_pk_valid_password(password))
-		return -1;
-
-	pw = sae_pk_base32_decode(password, len, &pw_len);
-	if (!pw)
-		return -1;
-
-	tmp->sec = (pw[0] & BIT(7)) ? 3 : 5;
-	tmp->lambda = len - len / 5;
-	tmp->fingerprint_bits = 8 * tmp->sec + 19 * tmp->lambda / 4 - 5;
-	wpa_printf(MSG_DEBUG, "SAE-PK: Sec=%u Lambda=%zu fingerprint_bits=%zu",
-		   tmp->sec, tmp->lambda, tmp->fingerprint_bits);
-
-	/* Construct Fingerprint from PasswordBase by prefixing with Sec zero
-	 * octets and skipping the Sec_1b bits */
-	pos = &tmp->fingerprint[tmp->sec];
-	bits = tmp->fingerprint_bits - 8 * tmp->sec;
-	wpa_hexdump_key(MSG_DEBUG, "SAE-PK: PasswordBase", pw, pw_len);
-	while (bits > 0) {
-		if (val_bits < 8) {
-			sae_pk_buf_shift_left_1(pw, pw_len); /* Sec_1b */
-			val19 = sae_pk_get_be19(pw);
-			sae_pk_buf_shift_left_19(pw, pw_len);
-			val = (val << 19) | val19;
-			val_bits += 19;
-		}
-		if (val_bits >= 8) {
-			if (bits < 8)
-				break;
-			*pos++ = (val >> (val_bits - 8)) & 0xff;
-			val_bits -= 8;
-			bits -= 8;
-		}
-	}
-	if (bits > 0) {
-		val >>= val_bits - bits;
-		*pos++ = val << (8 - bits);
-	}
-	tmp->fingerprint_bytes = pos - tmp->fingerprint;
-	wpa_hexdump_key(MSG_DEBUG, "SAE-PK: Fingerprint",
-			tmp->fingerprint, tmp->fingerprint_bytes);
-	bin_clear_free(pw, pw_len);
-	return 0;
+    //Modified signature because sae was not needed in method
+    return sae_pk_set_password_h(sae->tmp, password);
 }
 
 
-static size_t sae_group_2_hash_len(int group)
+size_t sae_group_2_hash_len(int group)
 {
 	switch (group) {
 	case 19:
@@ -493,8 +497,15 @@ struct sae_pk * sae_parse_pk(const char *val)
 		wpa_printf(MSG_INFO, "SAE: Failed to base64 decode PK key");
 		goto fail;
 	}
+#ifdef  CONFIG_PREAUTH_ATTACKS
+    pk->der = malloc(der_len);
+    memcpy(pk->der,der,der_len);
+    pk->der_len = der_len;
+    wpa_printf(MSG_DEBUG, "SAE: Received der of length %lu", pk->der_len);
+    wpa_hexdump(MSG_DEBUG,"SAE: Received der:",pk->der,pk->der_len);
+#endif /* CONFIG_PREAUTH_ATTACKS */
 
-	pk->key = crypto_ec_key_parse_priv(der, der_len);
+    pk->key = crypto_ec_key_parse_priv(der, der_len);
 	bin_clear_free(der, der_len);
 	if (!pk->key)
 		goto fail;
@@ -502,7 +513,6 @@ struct sae_pk * sae_parse_pk(const char *val)
 	pk->pubkey = crypto_ec_key_get_subject_public_key(pk->key);
 	if (!pk->pubkey)
 		goto fail;
-
 #ifdef CONFIG_TESTING_OPTIONS
 	if (pos2) {
 		der = base64_decode(pos2, os_strlen(pos2), &der_len);
@@ -699,72 +709,79 @@ fail:
 
 }
 
+bool sae_pk_valid_fingerprint_h(struct sae_temporary_data * tmp,
+                                const u8 *m, size_t m_len,
+                                const u8 *k_ap, size_t k_ap_len, int group)
+{
+    u8 *hash_data, *pos;
+    size_t hash_len, hash_data_len;
+    u8 hash[SAE_MAX_HASH_LEN];
+    int res;
+
+    if (!tmp->fingerprint_bytes) {
+        wpa_printf(MSG_DEBUG,
+                   "SAE-PK: No PW available for K_AP fingerprint check");
+        return false;
+    }
+
+    /* Fingerprint = L(Hash(SSID || M || K_AP), 0, 8*Sec + 19*Lambda/4 - 5)
+     */
+
+    hash_len = sae_group_2_hash_len(group);
+    hash_data_len = tmp->ssid_len + m_len + k_ap_len;
+    hash_data = os_malloc(hash_data_len);
+    if (!hash_data)
+        return false;
+    pos = hash_data;
+    os_memcpy(pos, tmp->ssid, tmp->ssid_len);
+    pos += tmp->ssid_len;
+    os_memcpy(pos, m, m_len);
+    pos += m_len;
+    os_memcpy(pos, k_ap, k_ap_len);
+
+    wpa_hexdump_key(MSG_DEBUG, "SAE-PK: SSID || M || K_AP",
+                    hash_data, hash_data_len);
+    res = sae_hash(hash_len, hash_data, hash_data_len, hash);
+    bin_clear_free(hash_data, hash_data_len);
+    if (res < 0)
+        return false;
+    wpa_hexdump(MSG_DEBUG, "SAE-PK: Hash(SSID || M || K_AP)",
+                hash, hash_len);
+
+    if (tmp->fingerprint_bits > hash_len * 8) {
+        wpa_printf(MSG_INFO,
+                   "SAE-PK: Not enough hash output bits for the fingerprint");
+        return false;
+    }
+    if (tmp->fingerprint_bits % 8) {
+        size_t extra;
+
+        /* Zero out the extra bits in the last octet */
+        extra = 8 - tmp->fingerprint_bits % 8;
+        pos = &hash[tmp->fingerprint_bits / 8];
+        *pos = (*pos >> extra) << extra;
+    }
+    wpa_hexdump(MSG_DEBUG, "SAE-PK: Fingerprint", hash,
+                tmp->fingerprint_bytes);
+    res = os_memcmp_const(hash, tmp->fingerprint, tmp->fingerprint_bytes);
+    if (res) {
+        wpa_printf(MSG_DEBUG, "SAE-PK: K_AP fingerprint mismatch");
+        wpa_hexdump(MSG_DEBUG, "SAE-PK: Expected fingerprint",
+                    tmp->fingerprint, tmp->fingerprint_bytes);
+        return false;
+    }
+
+    wpa_printf(MSG_DEBUG, "SAE-PK: Valid K_AP fingerprint");
+    return true;
+}
+
 
 static bool sae_pk_valid_fingerprint(struct sae_data *sae,
 				     const u8 *m, size_t m_len,
 				     const u8 *k_ap, size_t k_ap_len, int group)
 {
-	struct sae_temporary_data *tmp = sae->tmp;
-	u8 *hash_data, *pos;
-	size_t hash_len, hash_data_len;
-	u8 hash[SAE_MAX_HASH_LEN];
-	int res;
-
-	if (!tmp->fingerprint_bytes) {
-		wpa_printf(MSG_DEBUG,
-			   "SAE-PK: No PW available for K_AP fingerprint check");
-		return false;
-	}
-
-	/* Fingerprint = L(Hash(SSID || M || K_AP), 0, 8*Sec + 19*Lambda/4 - 5)
-	 */
-
-	hash_len = sae_group_2_hash_len(group);
-	hash_data_len = tmp->ssid_len + m_len + k_ap_len;
-	hash_data = os_malloc(hash_data_len);
-	if (!hash_data)
-		return false;
-	pos = hash_data;
-	os_memcpy(pos, tmp->ssid, tmp->ssid_len);
-	pos += tmp->ssid_len;
-	os_memcpy(pos, m, m_len);
-	pos += m_len;
-	os_memcpy(pos, k_ap, k_ap_len);
-
-	wpa_hexdump_key(MSG_DEBUG, "SAE-PK: SSID || M || K_AP",
-			hash_data, hash_data_len);
-	res = sae_hash(hash_len, hash_data, hash_data_len, hash);
-	bin_clear_free(hash_data, hash_data_len);
-	if (res < 0)
-		return false;
-	wpa_hexdump(MSG_DEBUG, "SAE-PK: Hash(SSID || M || K_AP)",
-		    hash, hash_len);
-
-	if (tmp->fingerprint_bits > hash_len * 8) {
-		wpa_printf(MSG_INFO,
-			   "SAE-PK: Not enough hash output bits for the fingerprint");
-		return false;
-	}
-	if (tmp->fingerprint_bits % 8) {
-		size_t extra;
-
-		/* Zero out the extra bits in the last octet */
-		extra = 8 - tmp->fingerprint_bits % 8;
-		pos = &hash[tmp->fingerprint_bits / 8];
-		*pos = (*pos >> extra) << extra;
-	}
-	wpa_hexdump(MSG_DEBUG, "SAE-PK: Fingerprint", hash,
-		    tmp->fingerprint_bytes);
-	res = os_memcmp_const(hash, tmp->fingerprint, tmp->fingerprint_bytes);
-	if (res) {
-		wpa_printf(MSG_DEBUG, "SAE-PK: K_AP fingerprint mismatch");
-	wpa_hexdump(MSG_DEBUG, "SAE-PK: Expected fingerprint",
-		    tmp->fingerprint, tmp->fingerprint_bytes);
-		return false;
-	}
-
-	wpa_printf(MSG_DEBUG, "SAE-PK: Valid K_AP fingerprint");
-	return true;
+    //Changed signature because only tmp of sae is needed
+    return sae_pk_valid_fingerprint_h(sae->tmp,m,m_len,k_ap,k_ap_len,group);
 }
 
 

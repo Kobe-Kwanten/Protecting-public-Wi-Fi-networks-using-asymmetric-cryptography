@@ -1118,3 +1118,16 @@ static inline int wpa_drv_dpp_listen(struct wpa_supplicant *wpa_s, bool enable)
 }
 
 #endif /* DRIVER_I_H */
+
+
+#ifdef CONFIG_PREAUTH_ATTACKS
+
+static inline void wpa_drv_set_beacon_cntr(struct wpa_supplicant * wpa_s, u64 counter)
+{
+    if(!wpa_s->driver->set_beacon_cntr)
+        return;
+    wpa_s->driver->set_beacon_cntr(wpa_s->drv_priv, counter);
+}
+
+#endif /* CONFIG_PREAUTH_ATTACKS */
+

@@ -2103,6 +2103,17 @@ mscs_fail:
 	else
 		params.uapsd = -1;
 
+#ifdef  CONFIG_PREAUTH_ATTACKS
+    if(wpa_s->sae_pk_pub_der){
+        params.sae_pk_pub_der = wpa_s->sae_pk_pub_der;
+        params.sae_pk_pub_der_len = wpa_s->sae_pk_pub_der_len;
+        wpa_s->sae_pk_pub_der = NULL;
+        wpa_s->sae_pk_pub_der_len = 0;
+        wpa_hexdump(MSG_DEBUG, "Preauth-Attacks: Sending PK to kernel - ",params.sae_pk_pub_der,params.sae_pk_pub_der_len);
+    }
+#endif /* CONFIG_PREAUTH_ATTACKS */
+
+
 	if (wpa_drv_associate(wpa_s, &params) < 0) {
 		wpa_msg(wpa_s, MSG_INFO, "SME: Association request to the "
 			"driver failed");

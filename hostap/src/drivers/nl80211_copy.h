@@ -1417,6 +1417,12 @@ enum nl80211_commands {
 
 	NL80211_CMD_SET_SAR_SPECS,
 
+
+#ifdef CONFIG_PREAUTH_ATTACKS
+    NL80211_CMD_GET_BEACON_CNTR,
+    NL80211_CMD_SET_BEACON_CNTR,
+#endif /* CONFIG_PREAUTH_ATTACKS */
+
 	/* add new commands above here */
 
 	/* used to define NL80211_CMD_MAX below */
@@ -3058,6 +3064,12 @@ enum nl80211_attrs {
 	NL80211_ATTR_DISABLE_HE,
 
 	/* add attributes here, update the policy in nl80211.c */
+
+#ifdef CONFIG_PREAUTH_ATTACKS
+    NL80211_ATTR_SAE_PK_DER,
+    NL80211_ATTR_SAE_PK_PUB_DER,
+    NL80211_ATTR_BEACON_CNTR,
+#endif /* CONFIG_PREAUTH_ATTACKS*/
 
 	__NL80211_ATTR_AFTER_LAST,
 	NUM_NL80211_ATTR = __NL80211_ATTR_AFTER_LAST,

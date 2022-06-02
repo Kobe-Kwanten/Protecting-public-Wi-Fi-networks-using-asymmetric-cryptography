@@ -427,6 +427,11 @@ struct hostapd_data {
 #ifdef CONFIG_CTRL_IFACE_UDP
        unsigned char ctrl_iface_cookie[CTRL_IFACE_COOKIE_LEN];
 #endif /* CONFIG_CTRL_IFACE_UDP */
+
+#ifdef CONFIG_PREAUTH_ATTACKS
+    const u8 * probe_req_nonce;
+    u8 probe_sta_address[ETH_ALEN];
+#endif /* CONFIG_PREAUTH_ATTACKS*/
 };
 
 

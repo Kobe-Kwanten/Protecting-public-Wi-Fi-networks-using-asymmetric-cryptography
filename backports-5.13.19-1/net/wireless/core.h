@@ -560,3 +560,14 @@ void cfg80211_pmsr_wdev_down(struct wireless_dev *wdev);
 void cfg80211_pmsr_free_wk(struct work_struct *work);
 
 #endif /* __NET_WIRELESS_CORE_H */
+
+
+
+
+//#ifdef CONFIG_PREAUTH_ATTACKS
+
+u64 cfg80211_get_beacon_cntr(struct cfg80211_registered_device *rdev, struct net_device *dev);
+
+void cfg80211_set_beacon_cntr(struct cfg80211_registered_device *rdev, struct net_device *dev, u64 cntr);
+
+//#endif /* CONFIG_PREAUTH_ATTACKS */

@@ -30,6 +30,7 @@
 #include "nl80211.h"
 #include "reg.h"
 #include "rdev-ops.h"
+#include <linux/crypto.h>
 
 static int nl80211_crypto_settings(struct cfg80211_registered_device *rdev,
 				   struct genl_info *info,
@@ -477,6 +478,7 @@ static const struct nla_policy nl80211_policy[NUM_NL80211_ATTR] = {
 	[NL80211_ATTR_KEY] = { .type = NLA_NESTED, },
 	[NL80211_ATTR_KEY_DATA] = { .type = NLA_BINARY,
 				    .len = WLAN_MAX_KEY_LEN },
+					
 	[NL80211_ATTR_KEY_IDX] = NLA_POLICY_MAX(NLA_U8, 7),
 	[NL80211_ATTR_KEY_CIPHER] = { .type = NLA_U32 },
 	[NL80211_ATTR_KEY_DEFAULT] = { .type = NLA_FLAG },
@@ -776,6 +778,14 @@ static const struct nla_policy nl80211_policy[NUM_NL80211_ATTR] = {
 	[NL80211_ATTR_RECONNECT_REQUESTED] = { .type = NLA_REJECT },
 	[NL80211_ATTR_SAR_SPEC] = NLA_POLICY_NESTED(sar_policy),
 	[NL80211_ATTR_DISABLE_HE] = { .type = NLA_FLAG },
+
+//#ifdef CONFIG_PREAUTH_ATTACKS
+
+	[NL80211_ATTR_SAE_PK_DER] = { .type = NLA_BINARY },
+	[NL80211_ATTR_SAE_PK_PUB_DER] = { .type = NLA_BINARY },
+	[NL80211_ATTR_BEACON_CNTR] = { .type = NLA_U64 },
+
+//#endif /*CONFIG_PREAUTH_ATTACKS*/
 };
 
 /* policy for the key attributes */
@@ -4990,9 +5000,9 @@ static int nl80211_parse_beacon(struct cfg80211_registered_device *rdev,
 				struct nlattr *attrs[],
 				struct cfg80211_beacon_data *bcn)
 {
+    
 	bool haveinfo = false;
 	int err;
-
 	memset(bcn, 0, sizeof(*bcn));
 
 	if (attrs[NL80211_ATTR_BEACON_HEAD]) {
@@ -5325,6 +5335,7 @@ static bool nl80211_valid_auth_type(struct cfg80211_registered_device *rdev,
 
 static int nl80211_start_ap(struct sk_buff *skb, struct genl_info *info)
 {
+	
 	struct cfg80211_registered_device *rdev = info->user_ptr[0];
 	struct net_device *dev = info->user_ptr[1];
 	struct wireless_dev *wdev = dev->ieee80211_ptr;
@@ -5527,6 +5538,18 @@ static int nl80211_start_ap(struct sk_buff *skb, struct genl_info *info)
 	if (info->attrs[NL80211_ATTR_EXTERNAL_AUTH_SUPPORT])
 		params.flags |= AP_SETTINGS_EXTERNAL_AUTH_SUPPORT;
 
+//#ifdef CONFIG_PREAUTH_ATTACKS
+
+	if(info->attrs[NL80211_ATTR_SAE_PK_DER]) {
+		params.crypto.der = nla_data(info->attrs[NL80211_ATTR_SAE_PK_DER]);
+		params.crypto.der_len = nla_len(info->attrs[NL80211_ATTR_SAE_PK_DER]);
+		//printk(KERN_ALERT "DEBUG AP: Received sae-pk der of size %lu \n", params.crypto.der_len);
+		//print_hex_dump(KERN_ALERT, "DEBUG AP: der ", DUMP_PREFIX_NONE, 16, 1, (u8 *) params.crypto.der,params.crypto.der_len,false);
+	}
+
+//#endif /*CONFIG_PREAUTH_ATTACKS*/
+	
+
 	wdev_lock(wdev);
 	err = rdev_start_ap(rdev, dev, &params);
 	if (!err) {
@@ -5549,6 +5572,7 @@ out:
 
 static int nl80211_set_beacon(struct sk_buff *skb, struct genl_info *info)
 {
+    
 	struct cfg80211_registered_device *rdev = info->user_ptr[0];
 	struct net_device *dev = info->user_ptr[1];
 	struct wireless_dev *wdev = dev->ieee80211_ptr;
@@ -9989,6 +10013,9 @@ static int nl80211_associate(struct sk_buff *skb, struct genl_info *info)
 	const u8 *bssid, *ssid;
 	int err, ssid_len = 0;
 	u32 freq;
+//#ifdef CONFIG_PREAUTH_ATTACKS
+	u8 * sae_pk_pub;
+//#endif /* CONFIG_PREAUTH_ATTACKS */
 
 	if (dev->ieee80211_ptr->conn_owner_nlportid &&
 	    dev->ieee80211_ptr->conn_owner_nlportid != info->snd_portid)
@@ -10105,6 +10132,22 @@ static int nl80211_associate(struct sk_buff *skb, struct genl_info *info)
 		       nla_data(info->attrs[NL80211_ATTR_S1G_CAPABILITY]),
 		       sizeof(req.s1g_capa));
 	}
+
+//#ifdef CONFIG_PREAUTH_ATTACKS
+
+	if(info->attrs[NL80211_ATTR_SAE_PK_PUB_DER]){
+		req.sae_pk_pub_len = nla_len(info->attrs[NL80211_ATTR_SAE_PK_PUB_DER]); //Geeft de length	
+		sae_pk_pub = nla_data(info->attrs[NL80211_ATTR_SAE_PK_PUB_DER]);    //Geeft de pointer
+
+		//Copy want message wordt later gecleared
+		req.sae_pk_pub = kmalloc(req.sae_pk_pub_len, GFP_KERNEL);
+		memcpy(req.sae_pk_pub, sae_pk_pub, req.sae_pk_pub_len);
+		
+		print_hex_dump(KERN_DEBUG, "DEBUG CLIENT: Initiated assoc with pub ",DUMP_PREFIX_NONE, 16, 1, req.sae_pk_pub, req.sae_pk_pub_len, false);
+	}
+
+//#endif /*CONFIG_PREAUTH_ATTACKS*/
+	
 
 	err = nl80211_crypto_settings(rdev, info, &req.crypto, 1);
 	if (!err) {
@@ -14960,6 +15003,10 @@ static int nl80211_set_sar_sub_specs(struct cfg80211_registered_device *rdev,
 	return 0;
 }
 
+
+
+
+
 static int nl80211_set_sar_specs(struct sk_buff *skb, struct genl_info *info)
 {
 	struct cfg80211_registered_device *rdev = info->user_ptr[0];
@@ -15031,6 +15078,57 @@ error:
 	kfree(sar_spec);
 	return err;
 }
+
+
+//#ifdef CONFIG_PREAUTH_ATTACKS
+
+static int nl80211_get_beacon_cntr(struct sk_buff *skb, struct genl_info *info) 
+{
+    struct cfg80211_registered_device *rdev = info->user_ptr[0];
+	struct net_device *dev = info->user_ptr[1];
+	struct sk_buff *msg;
+	void *hdr;
+
+	u64 cntr = cfg80211_get_beacon_cntr(rdev ,dev);
+	printk(KERN_ALERT "DEBUG AP: Retrieved counter for hostapd %lld \n", cntr);
+
+	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
+	if (!msg)
+		return -ENOBUFS;
+	hdr = nl80211hdr_put(msg, info->snd_portid, info->snd_seq, 0,
+			     NL80211_CMD_GET_BEACON_CNTR);
+
+	if (nla_put(msg, NL80211_ATTR_BEACON_CNTR, sizeof(u64), &cntr))
+		goto put_failure;
+
+	genlmsg_end(msg, hdr);
+	return genlmsg_reply(msg, info);
+
+put_failure:
+	genlmsg_cancel(msg, hdr);
+	return -EMSGSIZE;
+}
+
+static int nl80211_set_beacon_cntr(struct sk_buff * skb, struct genl_info * info)
+{
+    struct cfg80211_registered_device *rdev = info->user_ptr[0];
+	struct net_device *dev = info->user_ptr[1];
+	u64 counter;
+
+	if(info->attrs[NL80211_ATTR_BEACON_CNTR]){
+		counter = nla_get_u64(info->attrs[NL80211_ATTR_BEACON_CNTR]);
+	} else {
+		printk(KERN_ALERT "DEBUG CLIENT: Did not provide a counter! \n");
+		return -EINVAL;
+	}
+	printk(KERN_ALERT "DEBUG CLIENT: Setting expected beacon counter %llu \n", counter);
+	cfg80211_set_beacon_cntr(rdev ,dev, counter);
+	return 0;
+}
+
+//#endif /*CONFIG_PREAUTH_ATTACKS*/
+
+
 
 static const struct genl_ops nl80211_ops[] = {
 	{
@@ -15815,6 +15913,23 @@ static const struct genl_small_ops nl80211_small_ops[] = {
 		.internal_flags = NL80211_FLAG_NEED_WIPHY |
 				  NL80211_FLAG_NEED_RTNL,
 	},
+
+//#ifdef CONFIG_PREAUTH_ATTACKS
+	{
+		.cmd = NL80211_CMD_GET_BEACON_CNTR,
+		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
+		.doit = nl80211_get_beacon_cntr,
+		.flags = GENL_UNS_ADMIN_PERM,
+		.internal_flags = NL80211_FLAG_NEED_NETDEV_UP,
+	},
+	{
+		.cmd = NL80211_CMD_SET_BEACON_CNTR,
+		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
+		.doit = nl80211_set_beacon_cntr,
+		.flags = GENL_UNS_ADMIN_PERM,
+		.internal_flags = NL80211_FLAG_NEED_NETDEV_UP,
+	},
+//#endif /*CONFIG_PREAUTH_ATTACKS*/
 };
 
 static struct genl_family nl80211_fam __genl_ro_after_init = {
@@ -16240,6 +16355,7 @@ void nl80211_send_disassoc(struct cfg80211_registered_device *rdev,
 void cfg80211_rx_unprot_mlme_mgmt(struct net_device *dev, const u8 *buf,
 				  size_t len)
 {
+
 	struct wireless_dev *wdev = dev->ieee80211_ptr;
 	struct wiphy *wiphy = wdev->wiphy;
 	struct cfg80211_registered_device *rdev = wiphy_to_rdev(wiphy);
@@ -16615,6 +16731,7 @@ void nl80211_send_beacon_hint_event(struct wiphy *wiphy,
 	struct sk_buff *msg;
 	void *hdr;
 	struct nlattr *nl_freq;
+
 
 	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_ATOMIC);
 	if (!msg)

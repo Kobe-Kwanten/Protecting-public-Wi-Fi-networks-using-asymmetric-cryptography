@@ -1763,6 +1763,12 @@ static void wpa_supplicant_process_3_of_4(struct wpa_sm *sm,
 	    wpa_supplicant_install_ptk(sm, key, KEY_FLAG_RX))
 		goto failed;
 
+#ifdef CONFIG_PREAUTH_ATTACKS
+
+    sm->ctx->set_beacon_cntr(sm->ctx->ctx, ie.beacon_cntr);
+
+#endif /* CONFIG_PREAUTH_ATTACKS */
+
 	if (wpa_supplicant_send_4_of_4(sm, sm->bssid, key, ver, key_info,
 				       &sm->ptk) < 0) {
 		goto failed;
@@ -1819,6 +1825,8 @@ static void wpa_supplicant_process_3_of_4(struct wpa_sm *sm,
 
 	if (ie.gtk)
 		wpa_sm_set_rekey_offload(sm);
+
+
 
 	/* Add PMKSA cache entry for Suite B AKMs here since PMKID can be
 	 * calculated only after KCK has been derived. Though, do not replace an

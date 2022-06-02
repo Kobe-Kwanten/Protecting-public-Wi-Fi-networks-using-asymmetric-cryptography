@@ -53,7 +53,6 @@ int drv_add_interface(struct ieee80211_local *local,
 		      struct ieee80211_sub_if_data *sdata)
 {
 	int ret;
-
 	might_sleep();
 
 	if (WARN_ON(sdata->vif.type == NL80211_IFTYPE_AP_VLAN ||

@@ -119,6 +119,10 @@ u8 * hostapd_eid_time_zone(struct hostapd_data *hapd, u8 *eid);
 int hostapd_update_time_adv(struct hostapd_data *hapd);
 void hostapd_client_poll_ok(struct hostapd_data *hapd, const u8 *addr);
 u8 * hostapd_eid_bss_max_idle_period(struct hostapd_data *hapd, u8 *eid);
+#ifdef CONFIG_PREAUTH_ATTACKS
+u8 *hostapd_eid_fils_pub_key(u8 *pos, const struct wpabuf *pubkey);
+u8 *hostapd_eid_custom_sae_pk(u8 *pos, struct wpabuf *m);
+#endif /* CONFIG_PREAUTH_ATTACKS */
 
 int auth_sae_init_committed(struct hostapd_data *hapd, struct sta_info *sta);
 #ifdef CONFIG_SAE

@@ -94,6 +94,7 @@ int hostapd_build_ap_extra_ies(struct hostapd_data *hapd,
 	    add_buf_data(&proberesp, buf, pos - buf) < 0)
 		goto fail;
 
+
 #ifdef CONFIG_FST
 	if (add_buf(&beacon, hapd->iface->fst_ies) < 0 ||
 	    add_buf(&proberesp, hapd->iface->fst_ies) < 0 ||
@@ -198,7 +199,9 @@ int hostapd_build_ap_extra_ies(struct hostapd_data *hapd,
 		goto fail;
 #endif /* CONFIG_OWE */
 
-	add_buf(&beacon, hapd->conf->vendor_elements);
+
+
+    add_buf(&beacon, hapd->conf->vendor_elements);
 	add_buf(&proberesp, hapd->conf->vendor_elements);
 	add_buf(&assocresp, hapd->conf->assocresp_elements);
 

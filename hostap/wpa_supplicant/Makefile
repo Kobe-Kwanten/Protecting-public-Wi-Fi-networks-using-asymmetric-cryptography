@@ -1879,6 +1879,11 @@ ifdef CONFIG_NO_TKIP
 CFLAGS += -DCONFIG_NO_TKIP
 endif
 
+ifdef CONFIG_PREAUTH_ATTACKS
+CFLAGS += -DCONFIG_PREAUTH_ATTACKS
+
+endif
+
 dynamic_eap_methods: $(EAPDYN)
 
 _OBJS_VAR := OBJS_priv

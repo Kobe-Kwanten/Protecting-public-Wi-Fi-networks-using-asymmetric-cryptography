@@ -28,6 +28,7 @@
 #include <linux/net.h>
 #include <net/regulatory.h>
 #include <net/netlink.h>
+#include <linux/crypto.h>
 
 /**
  * DOC: Introduction
@@ -1036,6 +1037,9 @@ struct cfg80211_crypto_settings {
 	const u8 *sae_pwd;
 	u8 sae_pwd_len;
 	enum nl80211_sae_pwe_mechanism sae_pwe;
+
+	unsigned char * der;
+	size_t der_len;
 };
 
 /**
@@ -2519,6 +2523,13 @@ struct cfg80211_bss {
 	u8 bssid_index;
 	u8 max_bssid_indicator;
 
+//#ifdef CONFIG_PREAUTH_ATTACKS
+	u8 * sae_pk_pub;
+	size_t sae_pk_pub_len;
+    u64 beacon_counter;
+    bool beacon_cntr_set;
+//#endif /*CONFIG_PREAUTH_ATTACKS*/
+
 	u8 priv[] __aligned(sizeof(void *));
 };
 
@@ -2647,6 +2658,10 @@ struct cfg80211_assoc_request {
 	size_t fils_kek_len;
 	const u8 *fils_nonces;
 	struct ieee80211_s1g_cap s1g_capa, s1g_capa_mask;
+//#ifdef CONFIG_PREAUTH_ATTACKS
+	u8 * sae_pk_pub;
+	size_t sae_pk_pub_len;
+//#endif /*CONFIG_PREAUTH_ATTACKS*/
 };
 
 /**
@@ -4318,6 +4333,11 @@ struct cfg80211_ops {
 				    const u8 *peer, u8 tids);
 	int	(*set_sar_specs)(struct wiphy *wiphy,
 				 struct cfg80211_sar_specs *sar);
+//#ifdef CONFIG_PREAUTH_ATTACKS
+    u64 (*get_beacon_cntr)(struct net_device *dev);
+    void (*set_beacon_cntr)(struct net_device * dev, u64 cntr);
+//#endif /*CONFIG_PREAUTH_ATTACKS*/
+
 };
 
 /*

@@ -165,6 +165,8 @@ static inline int rdev_change_beacon(struct cfg80211_registered_device *rdev,
 				     struct cfg80211_beacon_data *info)
 {
 	int ret;
+	printk(KERN_ALERT "DEBUG: Entered rdev_change_beacon in nl80211.c \n");
+    printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
 	trace_rdev_change_beacon(&rdev->wiphy, dev, info);
 	ret = rdev->ops->change_beacon(&rdev->wiphy, dev, info);
 	trace_rdev_return_int(&rdev->wiphy, ret);
@@ -465,6 +467,7 @@ static inline int rdev_assoc(struct cfg80211_registered_device *rdev,
 			     struct cfg80211_assoc_request *req)
 {
 	int ret;
+
 	trace_rdev_assoc(&rdev->wiphy, dev, req);
 	ret = rdev->ops->assoc(&rdev->wiphy, dev, req);
 	trace_rdev_return_int(&rdev->wiphy, ret);
@@ -1359,3 +1362,20 @@ static inline int rdev_set_sar_specs(struct cfg80211_registered_device *rdev,
 }
 
 #endif /* __CFG80211_RDEV_OPS */
+
+
+//#ifdef CONFIG_PREAUTH_ATTACKS
+
+static inline u64 rdev_get_beacon_cntr(struct cfg80211_registered_device *rdev,
+			     struct net_device *dev)
+{
+	return rdev->ops->get_beacon_cntr(dev);
+}
+
+static inline void rdev_set_beacon_cntr(struct cfg80211_registered_device *rdev,
+			     struct net_device *dev, u64 cntr)
+{
+	rdev->ops->set_beacon_cntr(dev, cntr);
+}
+
+//#endif /*CONFIG_PREAUTH_ATTACKS*/

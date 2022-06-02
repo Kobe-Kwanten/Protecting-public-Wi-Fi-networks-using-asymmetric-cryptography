@@ -6,6 +6,8 @@
  * See README for more details.
  */
 
+
+#include <openssl/ec.h>
 #include "utils/includes.h"
 
 #include "utils/common.h"
@@ -23,7 +25,14 @@
 #include "bss.h"
 #include "scan.h"
 #include "mesh.h"
+#include "common/sae.h"
+#include "crypto/crypto.h"
 
+#ifdef  CONFIG_PREAUTH_ATTACKS
+#include <openssl/ecdsa.h>
+#include <openssl/x509.h>
+#include <time.h>
+#endif /* CONFIG_PREAUTH_ATTACKS */
 
 static void wpa_supplicant_gen_assoc_event(struct wpa_supplicant *wpa_s)
 {
@@ -645,6 +654,24 @@ static struct wpabuf * wpa_supplicant_extra_ies(struct wpa_supplicant *wpa_s)
 	if (wpabuf_resize(&extra_ie, 12) == 0)
 		wpas_mbo_scan_ie(wpa_s, extra_ie);
 #endif /* CONFIG_MBO */
+
+#ifdef CONFIG_PREAUTH_ATTACKS
+
+    if(wpabuf_resize(&extra_ie, FILS_NONCE_LEN + 3) == 0){
+        /* Generate Nonce */
+        os_get_random(wpa_s->probe_req_nonce,FILS_NONCE_LEN);
+
+        /* FILS Nonce */
+        wpabuf_put_u8(extra_ie, WLAN_EID_EXTENSION);                /* Element ID */
+        wpabuf_put_u8(extra_ie, 1 + FILS_NONCE_LEN);                /* Length */
+        wpabuf_put_u8(extra_ie, WLAN_EID_EXT_FILS_NONCE);           /* Element ID Extension */
+        wpabuf_put_data(extra_ie, wpa_s->probe_req_nonce, FILS_NONCE_LEN);    /* Nonce */
+
+        wpa_hexdump(MSG_DEBUG, "Preauth_Attacks: Generated a FILS Nonce element with Nonce",
+			    wpa_s->probe_req_nonce, FILS_NONCE_LEN);
+    }
+
+#endif /* CONFIG_PREAUTH_ATTACKS */
 
 	if (wpa_s->vendor_elem[VENDOR_ELEM_PROBE_REQ]) {
 		struct wpabuf *buf = wpa_s->vendor_elem[VENDOR_ELEM_PROBE_REQ];
@@ -1887,6 +1914,26 @@ const u8 * wpa_scan_get_ie(const struct wpa_scan_res *res, u8 ie)
 	return get_ie((const u8 *) (res + 1), ie_len, ie);
 }
 
+/**
+ * wpa_scan_get_ie_ext - Fetch a specified extended information element from a scan result
+ * @res: Scan result entry
+ * @ie: Extended Information element identitifier (WLAN_EID_EXT_*)
+ * Returns: Pointer to the extended information element (id field) or %NULL if not found
+ *
+ * This function returns the first matching information element in the scan
+ * result.
+ */
+const u8 * wpa_scan_get_ie_ext(const struct wpa_scan_res *res, u8 ie)
+{
+    size_t ie_len = res->ie_len;
+
+    /* Use the Beacon frame IEs if res->ie_len is not available */
+    if (!ie_len)
+        ie_len = res->beacon_ie_len;
+
+    return get_ie_ext((const u8 *) (res + 1), ie_len, ie);
+}
+
 
 /**
  * wpa_scan_get_vendor_ie - Fetch vendor information element from a scan result
@@ -2209,6 +2256,295 @@ void filter_scan_res(struct wpa_supplicant *wpa_s,
 			   (int) (res->num - j));
 		res->num = j;
 	}
+}
+
+
+/**
+ * Extract the public key information from a scan result if the FILS public key element is present
+ * @param res the scan result to extract from
+ * @param out_len length of the extracted pub_key
+ * @return pointer to the pub_key in res if present, NULL otherwise
+ */
+const u8 * wpa_scan_res_get_pub_key(struct wpa_scan_res * res, size_t * out_len)
+{
+    const u8 * fils_public_key = wpa_scan_get_ie_ext(res, WLAN_EID_EXT_FILS_PUBLIC_KEY);
+    const u8 *pub_key = NULL;
+    if(fils_public_key) {
+        *out_len = *(fils_public_key + 1) - 2; //Subtract extended ID + key type from length
+        pub_key = fils_public_key + 4;    // Skip past the element id, length, extended id and key type
+        //wpa_hexdump(MSG_DEBUG,"Preauth-Attacks: Received public key in probe response",pub_key,*out_len);
+    }
+    return pub_key;
+}
+
+/**
+ * Extract the m value from a scan result if present
+ * @param res the scan result
+ * @return m if present, NULL otherwise
+ */
+const u8 * wpa_scan_res_get_m(struct wpa_scan_res * res)
+{
+    const u8* sae_pk_element = wpa_scan_get_ie(res, WLAN_EID_VENDOR_SPECIFIC);
+    if(!sae_pk_element)
+        return NULL;
+    const u8* m = sae_pk_element + 6;   //Skip past the element id, length and vendor type
+    //wpa_hexdump(MSG_DEBUG,"Preauth-Attacks: Received modifier in probe response",m,SAE_PK_M_LEN);
+    return m;
+}
+
+/**
+ * Extract the signature from a scan result if present
+ * @param res the scan result
+ * @param out_len length of the signature
+ * @return pointer to sig in res if present, NULL otherwise
+ */
+const u8 *wpa_scan_res_get_sig(struct wpa_scan_res *res, size_t *out_len) {
+    const u8* fils_key_confirm = wpa_scan_get_ie_ext(res, WLAN_EID_EXT_FILS_KEY_CONFIRM);
+    const u8* sig = NULL;
+    if(fils_key_confirm){
+        *out_len = *(fils_key_confirm + 1) - 1; //Subtract extended ID field
+        sig = fils_key_confirm + 3;   //Skip past the element id, length and extended id
+        //wpa_hexdump(MSG_DEBUG,"Preauth-Attacks: Received signature in probe response",sig,*out_len);
+    }
+    return sig;
+}
+
+/**
+ * Extract the ssid from a scan result if present
+ * @param res the scan result
+ * @param out_len length of the ssid
+ * @return pointer to ssid in res if present, NULL otherwise
+ */
+const u8 *wpa_scan_res_get_ssid(struct wpa_scan_res *res, size_t *out_len) {
+    const u8* ssid_element = wpa_scan_get_ie(res, WLAN_EID_SSID);
+    const u8* ssid = NULL;
+    if(ssid_element){
+        *out_len = *(ssid_element + 1); //length field
+        ssid = ssid_element + 2;   //Skip past the element id and length
+       // wpa_hexdump(MSG_DEBUG, "Preauth-Attacks: Received SSID in probe response", ssid, *out_len);
+    }
+    return ssid;
+}
+
+/**
+ * Extract ies except for the FILS Key Confirm IE
+ * @param res the scan result
+ * @param out_len the length of the ies
+ * @return pointer to ies
+ */
+const u8 *wpa_scan_res_get_signed_ies(struct wpa_scan_res *res, size_t *out_len) {
+    //Assume here that the signature is the last element for proof of concept
+    const u8* fils_key_confirm = wpa_scan_get_ie_ext(res, WLAN_EID_EXT_FILS_KEY_CONFIRM);
+    const u8* ies = (const u8 *) (res + 1);
+    *out_len = fils_key_confirm - ies;
+    return ies;
+}
+
+struct preauth_attacks_data {
+    const u8* pub_key;
+    size_t pub_key_len;
+    const u8 * m;
+    const u8 * sig;
+    size_t sig_len;
+    const u8 * ssid;
+    size_t ssid_len;
+    const u8 * nonce;
+    const u8 * bssid;
+    const u8 * own_addr;
+    const u8 * ies;
+    size_t ies_len;
+};
+
+/**
+ * Extract values from scan result that are needed to verify the signature and public key
+ * @param res the scan result
+ * @param pa_data data structure to store the extracted values in
+ * @return true if succesful, false if values are missing in res
+ */
+bool wpa_scan_res_get_preauth_attacks_data(struct wpa_scan_res *res, struct preauth_attacks_data *pa_data) {
+    pa_data->pub_key = wpa_scan_res_get_pub_key(res,&(pa_data->pub_key_len));
+    if(!(pa_data->pub_key))
+        return false;
+    pa_data->m = wpa_scan_res_get_m(res);
+    if(!(pa_data->m))
+        return  false;
+    pa_data->sig = wpa_scan_res_get_sig(res,&(pa_data->sig_len));
+    if(!(pa_data->sig))
+        return false;
+    pa_data->ssid = wpa_scan_res_get_ssid(res,&(pa_data->ssid_len));
+    if(!(pa_data->ssid))
+        return false;
+    pa_data->bssid = res->bssid;
+    pa_data->ies = wpa_scan_res_get_signed_ies(res, &(pa_data->ies_len));
+    return true;
+}
+
+/**
+ * Verify the fingerprint of a public key that is included in a probe response
+ * @param sae_password the password to verify with
+ * @param group key group
+ * @param pa_data data containing the public key
+ * @return true if the fingerprint is valid
+ */
+bool preath_attacks_valid_fingerprint(const char *sae_password, int group,
+                                      struct preauth_attacks_data * pa_data)
+{
+    struct sae_temporary_data tmp;
+    memcpy(tmp.ssid, pa_data->ssid, pa_data->ssid_len);
+    tmp.ssid_len = pa_data->ssid_len;
+    sae_pk_set_password_h(&tmp, sae_password);
+    return sae_pk_valid_fingerprint_h(&tmp, pa_data->m, SAE_PK_M_LEN, pa_data->pub_key, pa_data->pub_key_len, group);
+}
+
+/**
+ * Generate the hash that will be compared with the decrypted signature of a probe response
+ * @param ec_key_group identifier of the group
+ * @param pa_data data used in the hash
+ * @param out_hash the hash
+ * @return the size of the hash, 0 if unsuccessful
+ */
+size_t preauth_attacks_gen_sig_hash(int ec_key_group,
+                                    const struct preauth_attacks_data* pa_data, u8 * out_hash)
+{
+    //hash(mac_AP || mac_station || nonce || ies)
+    size_t hash_data_len = 2* ETH_ALEN + FILS_NONCE_LEN + pa_data->ies_len;
+    struct wpabuf * hash_data = wpabuf_alloc(hash_data_len);
+    wpabuf_put_data(hash_data, pa_data->bssid , ETH_ALEN);
+    wpabuf_put_data(hash_data, pa_data->own_addr, ETH_ALEN);
+    wpabuf_put_data(hash_data, pa_data->nonce, FILS_NONCE_LEN);
+    wpabuf_put_data(hash_data, pa_data->ies, pa_data->ies_len);
+
+   // wpa_hexdump_buf_key(MSG_DEBUG, "Preauth-Attacks: mac_AP || mac_station || nonce || ies",
+   //                    hash_data);
+
+    size_t hash_len = sae_group_2_hash_len(ec_key_group);
+
+    if(sae_hash(hash_len, wpabuf_head(hash_data), wpabuf_len(hash_data), out_hash) < 0)
+        return 0;
+    //wpa_hexdump(MSG_DEBUG, "Preauth-Attacks: hash(public key || m || nonce || SSID || mac_AP || mac_station)",
+    //            out_hash, hash_len);
+    wpabuf_free(hash_data);
+    return hash_len;
+}
+
+/**
+ * Verify the signature of a probe response
+ * @param ec_key_group key group
+ * @param pa_data data containing the signature
+ * @param parsed_pub_key public key that can be used to decrypt the signature
+ * @return true if the signature is valid
+ */
+bool preauth_attacks_valid_sig(int ec_key_group, const struct preauth_attacks_data *pa_data,
+                               struct crypto_ec_key *parsed_pub_key)
+{
+    u8 hash[SAE_MAX_HASH_LEN];
+    size_t hash_len = preauth_attacks_gen_sig_hash(ec_key_group,pa_data,hash);
+    if(!hash_len)
+        return false;
+
+    int is_sig_valid = crypto_ec_key_verify_signature(parsed_pub_key, hash, hash_len,
+                                                      pa_data->sig, pa_data->sig_len);
+    if (is_sig_valid != 1) {
+    //    wpa_printf(MSG_INFO,"Preauth-Attacks: Invalid or incorrect signature in KeyAuth");
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Check if a scan result contains a valid signature and public key
+ * @param wpa_s wpa_supplicant data
+ * @param res the scan result
+ * @return true if the signature and fingerprint of the public key are valid
+ */
+bool wpa_supplicant_filter_preauth(struct wpa_supplicant *wpa_s, struct wpa_scan_res *res)
+{
+    //bool is_probe_response = res->ie_len;
+    /* Extract needed values */
+    struct preauth_attacks_data pa_data;
+    if(!wpa_scan_res_get_preauth_attacks_data(res,&pa_data))
+        return false;
+    pa_data.nonce = wpa_s->probe_req_nonce;
+    pa_data.own_addr = wpa_s->own_addr;
+
+    struct crypto_ec_key * parsed_pub_key = crypto_ec_key_parse_pub(pa_data.pub_key, pa_data.pub_key_len);
+    int group = crypto_ec_key_group(parsed_pub_key);
+
+
+    /* Verify public key with fingerprint */
+    if(!preath_attacks_valid_fingerprint(wpa_s->conf->ssid->sae_password, group, &pa_data)){
+    //    wpa_printf(MSG_DEBUG, "Preauth-Attacks: Invalid K_AP fingerprint!");
+        return false;
+    }
+    //wpa_printf(MSG_DEBUG, "Preauth-Attacks: Valid K_AP fingerprint");
+
+    /* Verify signature */
+    if(!preauth_attacks_valid_sig(group, &pa_data, parsed_pub_key))
+        return false;
+    //wpa_printf(MSG_DEBUG, "Preauth-Attacks: Valid KeyAuth signature received");
+    crypto_ec_key_deinit(parsed_pub_key);
+
+    EVP_PKEY * pkey = d2i_PUBKEY(NULL, &pa_data.pub_key, pa_data.pub_key_len);
+    EC_KEY * ec_pkey = EVP_PKEY_get1_EC_KEY(pkey);
+    const EC_POINT * pkey_point = EC_KEY_get0_public_key(ec_pkey);
+    unsigned char * buf;
+    size_t buf_size =  EC_POINT_point2buf(EC_KEY_get0_group(ec_pkey), pkey_point, POINT_CONVERSION_UNCOMPRESSED, &buf, NULL);
+    //wpa_hexdump(MSG_DEBUG, "Preauth-Attacks: Uncompressed pub key",buf,buf_size);
+
+    wpa_s->sae_pk_pub_der = buf;
+    wpa_s->sae_pk_pub_der_len = buf_size;
+
+    return true;
+}
+
+
+struct timespec tdiff(struct timespec start, struct timespec end)
+{
+    struct timespec temp;
+    if ((end.tv_nsec-start.tv_nsec)<0) {
+        temp.tv_sec = end.tv_sec-start.tv_sec-1;
+        temp.tv_nsec = 1000000000+end.tv_nsec-start.tv_nsec;
+    } else {
+        temp.tv_sec = end.tv_sec-start.tv_sec;
+        temp.tv_nsec = end.tv_nsec-start.tv_nsec;
+    }
+    return temp;
+}
+
+
+/**
+ * Filter scan results by verifying the signature in probe responses
+ *
+ * This method is part of the extension made by Kobe Kwanten to
+ * protect stations against preauthentication attacks
+ *
+ * @param wpa_s the wpa_supplicant information
+ * @param res the scan results
+ */
+void filter_scan_res_preauth_attacks(struct wpa_supplicant * wpa_s,
+        struct wpa_scan_results * res)
+{
+    size_t i, j;
+    struct timespec start, end, difference;
+    for (i = 0, j = 0; i < res->num; i++) {
+
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&start);
+        if (wpa_supplicant_filter_preauth(wpa_s, res->res[i])) {
+            clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&end);
+            difference = tdiff(start,end);
+            wpa_printf(MSG_DEBUG, "Preauth-Attacks: T %ld:%lu", difference.tv_sec, difference.tv_nsec);
+            res->res[j++] = res->res[i];
+        } else {
+            os_free(res->res[i]);
+            res->res[i] = NULL;
+        }
+    }
+
+    if (res->num != j) {
+        wpa_printf(MSG_DEBUG, "Preauth-Attacks: Filtered out %d scan results",
+                   (int) (res->num - j));
+        res->num = j;
+    }
 }
 
 
@@ -2667,6 +3003,10 @@ wpa_supplicant_get_scan_results(struct wpa_supplicant *wpa_s,
 		os_get_reltime(&scan_res->fetch_time);
 	}
 	filter_scan_res(wpa_s, scan_res);
+
+#ifdef CONFIG_PREAUTH_ATTACKS
+    filter_scan_res_preauth_attacks(wpa_s,scan_res);
+#endif /* CONFIG_PREAUTH_ATTACKS */
 
 	for (i = 0; i < scan_res->num; i++) {
 		struct wpa_scan_res *scan_res_item = scan_res->res[i];

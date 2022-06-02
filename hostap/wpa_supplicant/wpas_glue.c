@@ -1360,6 +1360,16 @@ static void wpa_supplicant_store_ptk(void *ctx, u8 *addr, int cipher,
 #endif /* CONFIG_NO_WPA */
 
 
+#ifdef CONFIG_PREAUTH_ATTACKS
+static void wpa_set_beacon_cntr(void *ctx, u64 counter)
+{
+    struct wpa_supplicant * wpa_s = ctx;
+    wpa_drv_set_beacon_cntr(wpa_s,counter);
+}
+
+#endif /* CONFIG_PREAUTH_ATTACKS */
+
+
 int wpa_supplicant_init_wpa(struct wpa_supplicant *wpa_s)
 {
 #ifndef CONFIG_NO_WPA
@@ -1422,6 +1432,7 @@ int wpa_supplicant_init_wpa(struct wpa_supplicant *wpa_s)
 	ctx->channel_info = wpa_supplicant_channel_info;
 	ctx->transition_disable = wpa_supplicant_transition_disable;
 	ctx->store_ptk = wpa_supplicant_store_ptk;
+    ctx->set_beacon_cntr = wpa_set_beacon_cntr;
 
 	wpa_s->wpa = wpa_sm_init(ctx);
 	if (wpa_s->wpa == NULL) {

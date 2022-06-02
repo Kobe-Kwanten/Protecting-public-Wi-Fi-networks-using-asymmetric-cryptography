@@ -26,6 +26,9 @@
 #include "pae/ieee802_1x_kay.h"
 #endif /* CONFIG_MACSEC */
 #include "utils/list.h"
+#ifdef CONFIG_PREAUTH_ATTACKS
+#include "../src/crypto/crypto.h"
+#endif /* CONFIG_PREAUTH_ATTACKS */
 
 #define HOSTAPD_CHAN_DISABLED 0x00000001
 #define HOSTAPD_CHAN_NO_IR 0x00000002
@@ -1203,6 +1206,12 @@ struct wpa_driver_associate_params {
 	 * 2 = both hunting-and-pecking loop and hash-to-element enabled
 	 */
 	int sae_pwe;
+
+#ifdef  CONFIG_PREAUTH_ATTACKS
+    u8 assoc_candidate_addr[ETH_ALEN];
+    u8 * sae_pk_pub_der;
+    size_t sae_pk_pub_der_len;
+#endif /* CONFIG_PREAUTH_ATTACKS */
 };
 
 enum hide_ssid {
@@ -1582,6 +1591,16 @@ struct wpa_driver_ap_params {
 	 * Unsolicited broadcast Probe Response template length
 	 */
 	size_t unsol_bcast_probe_resp_tmpl_len;
+
+#ifdef CONFIG_PREAUTH_ATTACKS
+	/**
+     * Private key from sae_pk which is used to sign beacon frames
+     */
+    struct crypto_ec_key * sae_pk_key;
+
+    unsigned char * der;
+    size_t der_len;
+#endif /* CONFIG_PREAUTH_ATTACKS */
 };
 
 struct wpa_driver_mesh_bss_params {
@@ -2546,6 +2565,12 @@ struct wpa_driver_ops {
 	const char *name;
 	/** One line description of the driver interface */
 	const char *desc;
+
+
+#ifdef CONFIG_PREAUTH_ATTACKS
+    int (*get_beacon_cntr)(void *priv, u64* cntr);
+    void (*set_beacon_cntr)(void *priv, u64 cntr);
+#endif /* CONFIG_PREAUTH_ATTACKS */
 
 	/**
 	 * get_bssid - Get the current BSSID

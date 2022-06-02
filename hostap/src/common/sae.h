@@ -34,6 +34,10 @@ struct sae_pk {
 #ifdef CONFIG_TESTING_OPTIONS
 	struct crypto_ec_key *sign_key_override;
 #endif /* CONFIG_TESTING_OPTIONS */
+#ifdef CONFIG_PREAUTH_ATTACKS
+    unsigned char *der;
+    size_t der_len;
+#endif /* CONFIG_PREAUTH_ATTACKS */
 };
 
 
@@ -168,5 +172,13 @@ int sae_check_confirm_pk(struct sae_data *sae, const u8 *ies, size_t ies_len);
 int sae_hash(size_t hash_len, const u8 *data, size_t len, u8 *hash);
 u32 sae_pk_get_be19(const u8 *buf);
 void sae_pk_buf_shift_left_19(u8 *buf, size_t len);
+
+#ifdef CONFIG_PREAUTH_ATTACKS
+size_t sae_group_2_hash_len(int group);
+int sae_pk_set_password_h(struct sae_temporary_data *tmp, const char *password);
+bool sae_pk_valid_fingerprint_h(struct sae_temporary_data * tmp,
+                                const u8 *m, size_t m_len,
+                                const u8 *k_ap, size_t k_ap_len, int group);
+#endif /* CONFIG_PREAUTH_ATTACKS */
 
 #endif /* SAE_H */

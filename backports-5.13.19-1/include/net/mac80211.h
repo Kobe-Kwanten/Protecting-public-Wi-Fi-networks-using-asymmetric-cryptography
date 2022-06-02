@@ -1741,6 +1741,15 @@ struct ieee80211_vif {
 
 	bool txqs_stopped[IEEE80211_NUM_ACS];
 
+//#ifdef CONFIG_PREAUTH_ATTACKS
+	unsigned char * sae_pk_key;
+	size_t sae_pk_key_len;
+	u8 associated_ap_addr[ETH_ALEN];
+	u8 * sae_pk_pub_der;
+	size_t sae_pk_pub_der_len;
+    u64 beacon_cntr;
+//#endif /*CONFIG_PREAUTH_ATTACKS*/
+
 	/* must be last */
 	u8 drv_priv[] __aligned(sizeof(void *));
 };

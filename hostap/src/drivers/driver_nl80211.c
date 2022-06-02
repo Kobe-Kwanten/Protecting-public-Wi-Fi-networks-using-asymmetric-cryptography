@@ -75,6 +75,8 @@ enum nlmsgerr_attrs {
 #endif /* ANDROID */
 
 
+
+
 static struct nl_sock * nl_create_handle(struct nl_cb *cb, const char *dbg)
 {
 	struct nl_sock *handle;
@@ -4827,6 +4829,14 @@ static int wpa_driver_nl80211_set_ap(void *priv,
 		goto fail;
 #endif /* CONFIG_FILS */
 
+#ifdef  CONFIG_PREAUTH_ATTACKS
+    if(params->der ){
+        if (nla_put(msg, NL80211_ATTR_SAE_PK_DER,params->der_len, params->der))
+            goto fail;
+        wpa_printf(MSG_DEBUG, "nl80211: Set SAE-PK der: %p", params->der);
+    }
+#endif /* CONFIG_PREAUTH_ATTACKS */
+
 	ret = send_and_recv_msgs_connect_handle(drv, msg, bss, 1);
 	if (ret) {
 		wpa_printf(MSG_DEBUG, "nl80211: Beacon set failed: %d (%s)",
@@ -6551,6 +6561,18 @@ static int wpa_driver_nl80211_associate(
 			    params->fils_nonces_len, params->fils_nonces))
 			goto fail;
 	}
+
+#ifdef CONFIG_PREAUTH_ATTACKS
+    if(params->sae_pk_pub_der){
+        wpa_printf(MSG_DEBUG, "Preauth-Attacks: Sending uncompressed der to kernel!");
+        if (nla_put(msg, NL80211_ATTR_SAE_PK_PUB_DER,
+                    params->sae_pk_pub_der_len, params->sae_pk_pub_der))
+            goto fail;
+        free(params->sae_pk_pub_der);
+        params->sae_pk_pub_der = NULL;
+        params->sae_pk_pub_der_len = 0;
+    }
+#endif /* CONFIG_PREAUTH_ATTACKS */
 
 	ret = send_and_recv_msgs_connect_handle(drv, msg, drv->first_bss, 1);
 	msg = NULL;
@@ -12108,6 +12130,64 @@ static int testing_nl80211_register_frame(void *priv, u16 type,
 #endif /* CONFIG_TESTING_OPTIONS */
 
 
+#ifdef CONFIG_PREAUTH_ATTACKS
+
+static int nl80211_get_beacon_cntr(struct nl_msg *msg, void * arg)
+{
+    u64* cntr = arg;
+    struct nlattr *tb_msg[NL80211_ATTR_MAX + 1];
+    struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
+
+    nla_parse(tb_msg, NL80211_ATTR_MAX, genlmsg_attrdata(gnlh, 0),
+              genlmsg_attrlen(gnlh, 0), NULL);
+    if (!tb_msg[NL80211_ATTR_BEACON_CNTR]) {
+        wpa_printf(MSG_DEBUG, "nl80211: No beacon counter value available");
+        return -1;
+    }
+    memcpy(cntr, nla_data(tb_msg[NL80211_ATTR_BEACON_CNTR]),sizeof(u64));
+    return 0;
+}
+
+
+static int wpa_driver_nl80211_get_beacon_cntr(void * priv, u64 * cntr)
+{
+    struct i802_bss *bss = priv;
+    struct wpa_driver_nl80211_data *drv = bss->drv;
+    struct nl_msg *msg;
+    struct nl_sock *nl_connect = get_connect_handle(bss);
+
+    msg = nl80211_drv_msg(drv, 0, NL80211_CMD_GET_BEACON_CNTR);
+    if (!msg)
+        return -ENOMEM;
+    if(nl_connect){
+        return send_and_recv(drv->global,nl_connect, msg, nl80211_get_beacon_cntr, cntr, NULL, NULL);
+    } else {
+        return send_and_recv_msgs(drv, msg, nl80211_get_beacon_cntr, cntr, NULL,NULL);
+    }
+}
+
+static void wpa_driver_nl80211_set_beacon_cntr(void * priv, u64 cntr)
+{
+    struct i802_bss *bss = priv;
+    struct wpa_driver_nl80211_data *drv = bss->drv;
+    struct nl_msg *msg;
+    struct nl_sock *nl_connect = get_connect_handle(bss);
+    int ret;
+    msg = nl80211_drv_msg(drv, 0, NL80211_CMD_SET_BEACON_CNTR);
+    if (!msg || nla_put_u64(msg, NL80211_ATTR_BEACON_CNTR, cntr))
+       return;
+
+    if(nl_connect){
+        ret = send_and_recv(drv->global,nl_connect, msg, NULL,NULL, NULL, NULL);
+    } else {
+        ret = send_and_recv_msgs(drv, msg, NULL, NULL, NULL,NULL);
+    }
+    wpa_printf(MSG_DEBUG,"Return: %d",ret);
+}
+
+#endif /* CONFIG_PREAUTH_ATTACKS */
+
+
 const struct wpa_driver_ops wpa_driver_nl80211_ops = {
 	.name = "nl80211",
 	.desc = "Linux nl80211/cfg80211",
@@ -12249,4 +12329,9 @@ const struct wpa_driver_ops wpa_driver_nl80211_ops = {
 #ifdef CONFIG_TESTING_OPTIONS
 	.register_frame = testing_nl80211_register_frame,
 #endif /* CONFIG_TESTING_OPTIONS */
+
+#ifdef CONFIG_PREAUTH_ATTACKS
+    .get_beacon_cntr = wpa_driver_nl80211_get_beacon_cntr,
+    .set_beacon_cntr = wpa_driver_nl80211_set_beacon_cntr,
+#endif /* CONFIG_PREAUTH_ATTACKS */
 };

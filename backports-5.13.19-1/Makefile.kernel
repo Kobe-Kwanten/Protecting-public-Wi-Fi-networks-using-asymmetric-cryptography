@@ -1,3 +1,4 @@
+#ccflags-y += -DCONFIG_PREAUTH_ATTACKS
 ifeq ($(CONFIG_BACKPORT_INTEGRATE),)
 # Since 2.6.21, try-run is available, but cc-disable-warning
 # was only added later, so we add it here ourselves:
@@ -48,3 +49,4 @@ obj-$(CPTCFG_USB_WDM) += drivers/usb/class/
 obj-$(CPTCFG_USB_USBNET) += drivers/net/usb/
 
 obj-$(CPTCFG_STAGING) += drivers/staging/
+

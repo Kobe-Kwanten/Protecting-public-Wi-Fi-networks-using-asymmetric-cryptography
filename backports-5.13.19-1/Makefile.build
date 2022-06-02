@@ -1,3 +1,4 @@
+#ccflags-y += -DCONFIG_PREAUTH_ATTACKS
 # detect if make supports --eval
 _EVAL := $(shell make --eval "test:" -f /dev/null test >/dev/null 2>&1 && echo YES || echo NO)
 ifeq ($(_EVAL),YES)

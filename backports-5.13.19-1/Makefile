@@ -1,7 +1,7 @@
 #
 # Makefile for the output source package
 #
-
+#ccflags-y += -DCONFIG_PREAUTH_ATTACKS
 ifeq ($(KERNELRELEASE),)
 
 MAKEFLAGS += --no-print-directory

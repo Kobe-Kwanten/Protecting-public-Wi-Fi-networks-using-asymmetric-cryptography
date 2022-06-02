@@ -1269,6 +1269,10 @@ ifdef CONFIG_NO_TKIP
 CFLAGS += -DCONFIG_NO_TKIP
 endif
 
+ifdef CONFIG_PREAUTH_ATTACKS
+	CFLAGS += -DCONFIG_PREAUTH_ATTACKS
+endif
+
 $(DESTDIR)$(BINDIR)/%: %
 	install -D $(<) $(@)
 
@@ -1343,6 +1347,9 @@ SOBJS += ../src/crypto/dh_groups.o
 SOBJS += ../src/crypto/sha256-kdf.o
 SOBJS += ../src/crypto/sha384-kdf.o
 SOBJS += ../src/crypto/sha512-kdf.o
+# Fixed to build sae_pk_gen
+SOBJS += ../src/crypto/random.o
+SOBJS += ../src/utils/eloop.o
 
 _OBJS_VAR := NOBJS
 include ../src/objs.mk

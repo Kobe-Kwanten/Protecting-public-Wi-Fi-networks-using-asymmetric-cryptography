@@ -246,6 +246,7 @@ static bool ieee80211_scan_accept_presp(struct ieee80211_sub_if_data *sdata,
 
 void ieee80211_scan_rx(struct ieee80211_local *local, struct sk_buff *skb)
 {
+	
 	struct ieee80211_rx_status *rx_status = IEEE80211_SKB_RXCB(skb);
 	struct ieee80211_sub_if_data *sdata1, *sdata2;
 	struct ieee80211_mgmt *mgmt = (void *)skb->data;
@@ -253,6 +254,7 @@ void ieee80211_scan_rx(struct ieee80211_local *local, struct sk_buff *skb)
 	struct ieee80211_channel *channel;
 	size_t min_hdr_len = offsetof(struct ieee80211_mgmt,
 				      u.probe_resp.variable);
+
 
 	if (!ieee80211_is_probe_resp(mgmt->frame_control) &&
 	    !ieee80211_is_beacon(mgmt->frame_control) &&
@@ -274,8 +276,11 @@ void ieee80211_scan_rx(struct ieee80211_local *local, struct sk_buff *skb)
 	sdata1 = rcu_dereference(local->scan_sdata);
 	sdata2 = rcu_dereference(local->sched_scan_sdata);
 
+	//Exits here when already seen
 	if (likely(!sdata1 && !sdata2))
-		return;
+		return; //Exit point for beacons that are probably known already
+		
+	
 
 	if (ieee80211_is_probe_resp(mgmt->frame_control)) {
 		struct cfg80211_scan_request *scan_req;

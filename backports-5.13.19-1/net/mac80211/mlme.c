@@ -2255,6 +2255,8 @@ static void ieee80211_set_associated(struct ieee80211_sub_if_data *sdata,
 	sdata->u.mgd.associated = cbss;
 	memcpy(sdata->u.mgd.bssid, cbss->bssid, ETH_ALEN);
 
+	print_hex_dump(KERN_DEBUG, "DEBUG CLIENT: Associated, setting bss with pub key ",DUMP_PREFIX_NONE, 16, 1, sdata->u.mgd.associated->sae_pk_pub, sdata->u.mgd.associated->sae_pk_pub_len, false);
+
 	ieee80211_check_rate_mask(sdata);
 
 	sdata->u.mgd.flags |= IEEE80211_STA_RESET_SIGNAL_AVE;
@@ -3652,6 +3654,7 @@ static bool ieee80211_assoc_success(struct ieee80211_sub_if_data *sdata,
 	/* set assoc capability (AID was already set earlier),
 	 * ieee80211_set_associated() will tell the driver */
 	bss_conf->assoc_capability = capab_info;
+
 	ieee80211_set_associated(sdata, cbss, changed);
 
 	/*
@@ -3769,7 +3772,7 @@ static void ieee80211_rx_mgmt_assoc_resp(struct ieee80211_sub_if_data *sdata,
 		 * destroy assoc_data afterwards, as otherwise an idle
 		 * recalc after assoc_data is NULL but before associated
 		 * is set can cause the interface to go idle
-		 */
+		 */ 
 		ieee80211_destroy_assoc_data(sdata, true, false);
 
 		/* get uapsd queues configuration */
@@ -4597,7 +4600,6 @@ void ieee80211_sta_work(struct ieee80211_sub_if_data *sdata)
 				.u.mlme.data = ASSOC_EVENT,
 				.u.mlme.status = MLME_TIMEOUT,
 			};
-
 			ieee80211_destroy_assoc_data(sdata, false, false);
 			cfg80211_assoc_timeout(sdata->dev, bss);
 			drv_event_callback(sdata->local, sdata, &event);

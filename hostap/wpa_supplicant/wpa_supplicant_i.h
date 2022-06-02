@@ -1518,6 +1518,13 @@ struct wpa_supplicant {
 	unsigned int enable_dscp_policy_capa:1;
 	unsigned int connection_dscp:1;
 	unsigned int wait_for_dscp_req:1;
+
+
+#ifdef CONFIG_PREAUTH_ATTACKS
+    u8 probe_req_nonce[FILS_NONCE_LEN];
+    u8 * sae_pk_pub_der;
+    size_t sae_pk_pub_der_len;
+#endif /* CONFIG_PREAUTH_ATTACKS */
 };
 
 

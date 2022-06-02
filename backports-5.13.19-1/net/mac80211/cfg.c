@@ -23,6 +23,16 @@
 #include "mesh.h"
 #include "wme.h"
 
+//#ifdef CONFIG_PREAUTH_ATTACKS
+
+#include <crypto/akcipher.h>
+#include <crypto/internal/akcipher.h>
+#include <crypto/ecc_curve.h>
+#include <crypto/ecdh.h>
+#include <crypto/hash.h>
+
+//#endif /*CONFIG_PREAUTH_ATTACKS*/
+
 static void ieee80211_set_mu_mimo_follow(struct ieee80211_sub_if_data *sdata,
 					 struct vif_params *params)
 {
@@ -957,11 +967,11 @@ static int ieee80211_assign_beacon(struct ieee80211_sub_if_data *sdata,
 				   struct cfg80211_beacon_data *params,
 				   const struct ieee80211_csa_settings *csa)
 {
+   
 	struct beacon_data *new, *old;
 	int new_head_len, new_tail_len;
 	int size, err;
 	u32 changed = BSS_CHANGED_BEACON;
-
 	old = sdata_dereference(sdata->u.ap.beacon, sdata);
 
 
@@ -1048,9 +1058,31 @@ static int ieee80211_assign_beacon(struct ieee80211_sub_if_data *sdata,
 
 	if (old)
 		kfree_rcu(old, rcu_head);
-
 	return changed;
 }
+
+//#ifdef CONFIG_PREAUTH_ATTACKS
+
+size_t der_to_key(u8* der, u8** out_key)
+{
+	unsigned char * pos = der;
+	size_t size;
+	size_t key_length;
+	pos += 2; // Skip SEQUENCE tag and length of sequence
+	pos++;	//Skip INTEGER tag
+	size = *pos; // get INTEGER length
+	pos += 1 + size; // Skip INTEGER length field + integer data
+	pos++; //SKIP OCTET STRING identifier
+	key_length = *(pos++); // get key length + skip length
+	*out_key = kmalloc(key_length,GFP_KERNEL);
+	memcpy(*out_key,pos,key_length); // Extract the key
+	return key_length;
+}
+
+
+//#endif CONFIG_PREAUTH_ATTACKS
+
+
 
 static int ieee80211_start_ap(struct wiphy *wiphy, struct net_device *dev,
 			      struct cfg80211_ap_settings *params)
@@ -1068,7 +1100,6 @@ static int ieee80211_start_ap(struct wiphy *wiphy, struct net_device *dev,
 		      BSS_CHANGED_TWT;
 	int i, err;
 	int prev_beacon_int;
-
 	old = sdata_dereference(sdata->u.ap.beacon, sdata);
 	if (old)
 		return -EALREADY;
@@ -1175,7 +1206,9 @@ static int ieee80211_start_ap(struct wiphy *wiphy, struct net_device *dev,
 	if (ieee80211_hw_check(&local->hw, HAS_RATE_CONTROL))
 		sdata->vif.bss_conf.beacon_tx_rate = params->beacon_rate;
 
+   
 	err = ieee80211_assign_beacon(sdata, &params->beacon, NULL);
+
 	if (err < 0)
 		goto error;
 	changed |= err;
@@ -1195,6 +1228,21 @@ static int ieee80211_start_ap(struct wiphy *wiphy, struct net_device *dev,
 			goto error;
 		changed |= BSS_CHANGED_UNSOL_BCAST_PROBE_RESP;
 	}
+
+//#ifdef CONFIG_PREAUTH_ATTACKS
+
+	/**
+	 * Format of the received der
+	 ECPrivateKey ::= SEQUENCE {
+		version        INTEGER { ecPrivkeyVer1(1) } (ecPrivkeyVer1),
+		privateKey     OCTET STRING,
+		parameters [0] ECParameters {{ NamedCurve }} OPTIONAL,
+		publicKey  [1] BIT STRING OPTIONAL
+	}
+	 */
+	sdata->vif.sae_pk_key_len = der_to_key(params->crypto.der, &(sdata->vif.sae_pk_key)); 
+
+//#endif /*CONFIG_PREAUTH_ATTACKS*/
 
 	err = drv_start_ap(sdata->local, sdata);
 	if (err) {
@@ -2514,7 +2562,7 @@ static int ieee80211_auth(struct wiphy *wiphy, struct net_device *dev,
 
 static int ieee80211_assoc(struct wiphy *wiphy, struct net_device *dev,
 			   struct cfg80211_assoc_request *req)
-{
+{	
 	return ieee80211_mgd_assoc(IEEE80211_DEV_TO_SUB_IF(dev), req);
 }
 
@@ -3049,6 +3097,8 @@ cfg80211_beacon_dup(struct cfg80211_beacon_data *beacon)
 	struct cfg80211_beacon_data *new_beacon;
 	u8 *pos;
 	int len;
+	 printk(KERN_DEBUG "DEBUG: Entered cfg80211_beacon_dup in cfg.c \n");
+    printk(KERN_DEBUG "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
 
 	len = beacon->head_len + beacon->tail_len + beacon->beacon_ies_len +
 	      beacon->proberesp_ies_len + beacon->assocresp_ies_len +
@@ -3256,8 +3306,11 @@ static int ieee80211_set_csa_beacon(struct ieee80211_sub_if_data *sdata,
 				    struct cfg80211_csa_settings *params,
 				    u32 *changed)
 {
+    
 	struct ieee80211_csa_settings csa = {};
 	int err;
+	printk(KERN_DEBUG "DEBUG: Entered cfg80211_beacon_dup in cfg.c \n");
+    printk(KERN_DEBUG "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
 
 	switch (sdata->vif.type) {
 	case NL80211_IFTYPE_AP:
@@ -4105,6 +4158,26 @@ static int ieee80211_set_sar_specs(struct wiphy *wiphy,
 	return local->ops->set_sar_specs(&local->hw, sar);
 }
 
+//#ifdef CONFIG_PREAUTH_ATTACKS
+
+static u64 ieee80211_get_beacon_cntr(struct net_device * dev)
+{
+	struct ieee80211_sub_if_data *sdata = IEEE80211_DEV_TO_SUB_IF(dev);
+	return sdata->vif.beacon_cntr;
+}
+
+
+static void ieee80211_set_beacon_cntr(struct net_device * dev, u64 cntr)
+{
+	struct ieee80211_sub_if_data *sdata = IEEE80211_DEV_TO_SUB_IF(dev);
+	if(sdata->u.mgd.associated) {
+		sdata->u.mgd.associated->beacon_cntr_set = true;
+		sdata->u.mgd.associated->beacon_counter = cntr;
+	}
+}
+
+//#endif /*CONFIG_PREAUTH_ATTACKS*/
+
 const struct cfg80211_ops mac80211_config_ops = {
 	.add_virtual_intf = ieee80211_add_iface,
 	.del_virtual_intf = ieee80211_del_iface,
@@ -4208,4 +4281,9 @@ const struct cfg80211_ops mac80211_config_ops = {
 	.set_tid_config = ieee80211_set_tid_config,
 	.reset_tid_config = ieee80211_reset_tid_config,
 	.set_sar_specs = ieee80211_set_sar_specs,
+
+//#ifdef CONFIG_PREAUTH_ATTACKS
+	.get_beacon_cntr = ieee80211_get_beacon_cntr,
+	.set_beacon_cntr = ieee80211_set_beacon_cntr,
+//#endif /*CONFIG_PREAUTH_ATTACKS*/
 };

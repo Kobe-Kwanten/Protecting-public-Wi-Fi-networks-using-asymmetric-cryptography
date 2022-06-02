@@ -32,6 +32,10 @@
 #include "pmksa_cache_auth.h"
 #include "wpa_auth_i.h"
 #include "wpa_auth_ie.h"
+#ifdef CONFIG_PREAUTH_ATTACKS
+#include "hostapd.h"
+#include <byteswap.h>
+#endif /* CONFIG_PREAUTH_ATTACKS */
 
 #define STATE_MACHINE_DATA struct wpa_state_machine
 #define STATE_MACHINE_DEBUG_PREFIX "WPA"
@@ -188,6 +192,7 @@ wpa_auth_send_eapol(struct wpa_authenticator *wpa_auth, const u8 *addr,
 {
 	if (!wpa_auth->cb->send_eapol)
 		return -1;
+    //wpa_auth->cb_ctx  == struct hostapd_data *hapd = ctx;
 	return wpa_auth->cb->send_eapol(wpa_auth->cb_ctx, addr, data, data_len,
 					encrypt);
 }
@@ -3401,6 +3406,8 @@ SM_STATE(WPA_PTK, PTKINITNEGOTIATING)
 	os_memset(rsc, 0, WPA_KEY_RSC_LEN);
 	wpa_auth_get_seqnum(sm->wpa_auth, NULL, gsm->GN, rsc);
 	/* If FT is used, wpa_auth->wpa_ie includes both RSNIE and MDIE */
+
+
 	wpa_ie = sm->wpa_auth->wpa_ie;
 	wpa_ie_len = sm->wpa_auth->wpa_ie_len;
 	if (sm->wpa == WPA_VERSION_WPA && (conf->wpa & WPA_PROTO_RSN) &&
@@ -3487,6 +3494,10 @@ SM_STATE(WPA_PTK, PTKINITNEGOTIATING)
 	}
 
 	kde_len = wpa_ie_len + ieee80211w_kde_len(sm) + ocv_oci_len(sm);
+
+#ifdef CONFIG_PREAUTH_ATTACKS
+    kde_len += 9; // Counter ie length
+#endif /* CONFIG_PREAUTH_ATTACKS */
 
 	if (sm->use_ext_key_id)
 		kde_len += 2 + RSN_SELECTOR_LEN + 2;
@@ -3622,6 +3633,22 @@ SM_STATE(WPA_PTK, PTKINITNEGOTIATING)
 				  payload, sizeof(payload), NULL, 0);
 	}
 #endif /* CONFIG_DPP2 */
+
+#ifdef CONFIG_PREAUTH_ATTACKS
+    struct hostapd_data * hapd =  sm->wpa_auth->cb_ctx;
+    u64 cntr;
+    hapd->driver->get_beacon_cntr(hapd->drv_priv,&cntr);
+    wpa_printf(MSG_DEBUG,"Preauth_attacks: Received counter value %lu from kernel", cntr);
+
+    // add counter value
+    *pos++ = WLAN_EID_EXTENSION;  /* Element ID */
+    *pos++ = 7;                     /* Length */
+    *pos++ = 94; 				  /* Custom exented ID which is unused according to  802.11 specifications*/
+    cntr = bswap_64(cntr);
+    u8 * counter_pos = (u8*) &cntr;
+    memcpy(pos, counter_pos + 2, 6);/* counter  */
+    pos += 6;
+#endif /* CONFIG_PREAUTH_ATTACKS */
 
 	wpa_send_eapol(sm->wpa_auth, sm,
 		       (secure ? WPA_KEY_INFO_SECURE : 0) |

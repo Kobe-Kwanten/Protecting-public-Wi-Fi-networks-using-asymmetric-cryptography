@@ -23,6 +23,7 @@
 #include <net/ieee80211_radiotap.h>
 #include <asm/unaligned.h>
 
+
 #include "ieee80211_i.h"
 #include "driver-ops.h"
 #include "led.h"
@@ -32,6 +33,14 @@
 #include "tkip.h"
 #include "wme.h"
 #include "rate.h"
+
+//#ifdef CONFIG_PREAUTH_ATTACKS
+#include <crypto/akcipher.h>
+#include <crypto/hash.h>
+#include <crypto/ecdh.h>
+#include <crypto/ecc_curve.h>
+
+//#endif /*CONFIG_PREAUTH_ATTACKS*/
 
 /*
  * monitor mode reception
@@ -3825,9 +3834,10 @@ static void ieee80211_rx_handlers_result(struct ieee80211_rx_data *rx,
 static void ieee80211_rx_handlers(struct ieee80211_rx_data *rx,
 				  struct sk_buff_head *frames)
 {
+	
 	ieee80211_rx_result res = RX_DROP_MONITOR;
 	struct sk_buff *skb;
-
+	
 #define CALL_RXH(rxh)			\
 	do {				\
 		res = rxh(rx);		\
@@ -3889,9 +3899,10 @@ static void ieee80211_rx_handlers(struct ieee80211_rx_data *rx,
 
 static void ieee80211_invoke_rx_handlers(struct ieee80211_rx_data *rx)
 {
+
 	struct sk_buff_head reorder_release;
 	ieee80211_rx_result res = RX_DROP_MONITOR;
-
+	
 	__skb_queue_head_init(&reorder_release);
 
 #define CALL_RXH(rxh)			\
@@ -4035,6 +4046,166 @@ EXPORT_SYMBOL(ieee80211_mark_rx_ba_filtered_frames);
 
 /* main receive path */
 
+
+//#ifdef CONFIG_PREAUTH_ATTACKS
+
+struct ecdsa_beacon_data {
+	u8* sig_ie;
+	u8* sig;
+	size_t sig_len;
+	u64 beacon_counter;
+};
+
+
+/**
+ * Parse the data from a ecdsa protected beacon into a ecdsa_beacon_data struct
+ * 
+ * @param skb the skb of the beacon
+ * @param data the struct in which the parsed data will be stored
+ */
+void parse_ecdsa_data(struct sk_buff *skb, struct ecdsa_beacon_data * data){
+	struct ieee80211_mgmt *mgmt = (struct ieee80211_mgmt*) skb->data;
+	size_t ie_len = skb->len - (mgmt->u.beacon.variable - (u8 *) mgmt);
+	u8* ies = mgmt->u.beacon.variable;
+	size_t pos = 0;
+
+	//While there are ies to check
+	while(pos < ie_len){
+		u8 tag = ies[pos++];
+		u8 len = ies[pos++];
+		if(tag == WLAN_EID_EXTENSION){
+			u8 ext_tag = ies[pos++];
+			len -=1; // Seen the first byte
+			if(ext_tag == WLAN_EID_EXT_FILS_KEY_CONFIRM){
+				data->sig_ie = &ies[pos - 3];
+				data->sig = &ies[pos];
+				data->sig_len = len;
+			} else if (ext_tag == 94) {
+				//Custom tag for counter
+				data->beacon_counter = 0;
+				u8* counter_pos = (u8*) &(data->beacon_counter);
+				memcpy(counter_pos + 2, &ies[pos], len);
+				data->beacon_counter = get_unaligned_be64((u64*)counter_pos);
+			}
+		} 
+		pos += len;
+    }
+}
+
+
+/**
+ * Extract the hash data which is used to verify the signature of the beacon
+ * 
+ * @param skb the beacon skb
+ * @param data the ecdsa data with information about the signature
+ * @param out_hash_data the location where the pointer to the hash data will be stored
+ * @return the length of the extracted hash data
+ */
+size_t extract_beacon_hash_data(struct sk_buff *skb, struct ecdsa_beacon_data * data, u8** out_hash_data){
+		struct ieee80211_mgmt *mgmt = (struct ieee80211_mgmt*) skb->data;
+		size_t ie_len = skb->len - (mgmt->u.beacon.variable - (u8 *) mgmt);
+		
+		//the length field + ID + actual length of the ie content
+		u8 sig_ie_len = data->sig_ie[1] + 2; 
+
+		// hash_data_len = sender address + ies - signature ie
+		size_t hash_data_len = ETH_ALEN + ie_len - sig_ie_len;
+		u8 * hash_data = kmalloc(hash_data_len, GFP_KERNEL);
+
+		//Copy the sender address
+		memcpy(hash_data, mgmt->sa, ETH_ALEN);
+
+		size_t ie_before_sig_len =  (data->sig_ie  - mgmt->u.beacon.variable);
+		//Copy the information elements up to the signature element
+		memcpy(hash_data + ETH_ALEN, mgmt->u.beacon.variable, ie_before_sig_len);
+
+		size_t ie_after_sig_len = ie_len - ie_before_sig_len - sig_ie_len;
+		memcpy(hash_data + ETH_ALEN + ie_before_sig_len, data->sig_ie + sig_ie_len, ie_after_sig_len);
+
+		*out_hash_data = hash_data;
+		return hash_data_len;
+}
+
+/**
+* Perform a sha256 hash on data
+*	
+* @param data the data to hash
+* @param data_len the length of the data
+* @param digest the location where the digest result will be stored
+*/
+bool sha256_hash(u8* data, size_t data_len, u8 * digest){
+	struct crypto_shash * sha256 = crypto_alloc_shash("sha256",0,0);
+	size_t sdesc_size;
+	struct shash_desc *sdesc;
+	if(IS_ERR(sha256)) {
+		return false;
+	}
+
+	sdesc_size = sizeof(struct shash_desc) + crypto_shash_descsize(sha256);
+	sdesc = kmalloc(sdesc_size, GFP_KERNEL);
+	sdesc->tfm = sha256;
+	crypto_shash_digest(sdesc, data, data_len, digest);
+	kfree(sdesc);	
+	crypto_free_shash(sha256);
+	return true;
+}
+
+/**
+ * Verify the signature of an ecdsa protected beacon
+ * 
+ * @param pk the public key to verify with
+ * @param pk_len the length of the public key
+ * @param beacon_data the signature data from the beacon
+ * @param digest the digest created from the beacon information to verify against
+ */ 
+bool verify_beacon(u8* pk, size_t pk_len, struct ecdsa_beacon_data * beacon_data, u8* digest) {
+	struct crypto_akcipher * ecdsa = crypto_alloc_akcipher("ecdsa-nist-p256",0,0);
+	struct akcipher_request * verify_request;
+	struct scatterlist sg;
+	size_t data_len;
+	u8* data;
+	int verify_res;
+
+
+	if(crypto_akcipher_set_pub_key(ecdsa, pk, pk_len)){
+		printk(KERN_ALERT "DEBUG CLIENT: Failed to set public key in ecdsa_generic!\n");
+		return false;
+	}
+
+	//Set up the verify request
+	verify_request = akcipher_request_alloc(ecdsa, GFP_KERNEL);
+	
+	data_len = beacon_data->sig_len + 32;
+	data = kmalloc(data_len, GFP_KERNEL);
+	memcpy(data, beacon_data->sig, beacon_data->sig_len);
+	memcpy(data + beacon_data->sig_len, digest, 32);
+	sg_init_one(&sg, data, data_len);
+
+	akcipher_request_set_crypt(verify_request, &sg ,NULL, beacon_data->sig_len, 32);
+
+	verify_res = crypto_akcipher_verify(verify_request);
+	if(verify_res) {
+		if (verify_res == -EBADMSG){
+			printk(KERN_ALERT "DEBUG CLIENT: Failed to verify! r and s not in right range!\n");
+		} else if (verify_res == -EKEYREJECTED){
+			printk(KERN_ALERT "DEBUG CLIENT: Failed to verify! Rejected key!\n");
+		} else if (verify_res == -EINVAL) {
+			printk(KERN_ALERT "DEBUG CLIENT: Failed to verify! Public key not set!\n");
+		} else if (verify_res == -ENOMEM) {
+			printk(KERN_ALERT "DEBUG CLIENT: Failed to verify! Failed to allocate buffer!\n");
+		} else {
+			printk(KERN_ALERT "DEBUG CLIENT: Failed to verify! %d\n",verify_res);
+		}
+		return false;
+	}
+
+	akcipher_request_free(verify_request);
+	crypto_free_akcipher(ecdsa);
+	return true;
+}
+		
+//#endif /*CONFIG_PREAUTH_ATTACKS*/
+
 static bool ieee80211_accept_frame(struct ieee80211_rx_data *rx)
 {
 	struct ieee80211_sub_if_data *sdata = rx->sdata;
@@ -4044,6 +4215,90 @@ static bool ieee80211_accept_frame(struct ieee80211_rx_data *rx)
 	u8 *bssid = ieee80211_get_bssid(hdr, skb->len, sdata->vif.type);
 	bool multicast = is_multicast_ether_addr(hdr->addr1) ||
 			 ieee80211_is_s1g_beacon(hdr->frame_control);
+
+//#ifdef CONFIG_PREAUTH_ATTACKS
+	u64 start, end, difference;	
+	
+
+	if(ieee80211_is_beacon(hdr->frame_control)){
+		u8 * sender_addr = hdr->addr2;
+		struct  cfg80211_bss* bss = sdata->u.mgd.associated;
+		struct ecdsa_beacon_data ecdsa_data = {0};
+		u8* hash_data;
+		size_t hash_data_len;
+		u8 digest[32];
+
+		//start = ktime_get_ns();
+
+		// Ignore beacons until we are associated
+		// Ignore beacons until we can verify them
+		// Only allow beacons of the associated ap
+		// Only allow beacons once we know the minimal counter value
+		if(!bss || !bss->sae_pk_pub || !ether_addr_equal(sender_addr, bss->bssid) || !bss->beacon_cntr_set){
+			return false;
+		}
+
+		//Extract the data from the beacon needed to verify the beacon
+    	parse_ecdsa_data(skb, &ecdsa_data);
+
+    	//Need a signature
+    	if(!ecdsa_data.sig)
+    		return false;
+
+    	// If the counter is less than what we have seen, reject
+    	if(ecdsa_data.beacon_counter <= bss->beacon_counter){
+    		printk(KERN_ALERT "DEBUG CLIENT: Invalid counter received %lld, expected more than %lld! \n", ecdsa_data.beacon_counter, bss->beacon_counter);
+    		return false;
+    	}
+    	
+		//start = ktime_get_ns();
+
+		//Extract hash data
+		hash_data_len = extract_beacon_hash_data(skb, &ecdsa_data, &hash_data);
+
+		//end = ktime_get_ns();	
+		//difference = end - start;
+		//printk(KERN_DEBUG "DEBUG Client: H %llu\n", difference);
+
+		//Create the digest
+
+		//start = ktime_get_ns();
+		
+		if(!sha256_hash(hash_data,hash_data_len,digest)){
+			kfree(hash_data);
+			return false;
+		}
+
+		//end = ktime_get_ns();	
+		//difference = end - start;
+		//printk(KERN_DEBUG "DEBUG Client: D %llu\n", difference);
+
+
+		kfree(hash_data);
+
+		//start = ktime_get_ns();
+
+		if(!verify_beacon(bss->sae_pk_pub, bss->sae_pk_pub_len, &ecdsa_data, digest)){
+			printk(KERN_DEBUG "DEBUG CLIENT: Invalid signature in Beacon!\n");
+			return false;
+		}
+
+		//end = ktime_get_ns();	
+		//difference = end - start;
+		//printk(KERN_DEBUG "DEBUG Client: V %llu\n", difference);
+
+
+		//Verification succesful!
+		//Update counter to the latest we have seen
+		bss->beacon_counter = ecdsa_data.beacon_counter;
+		//printk(KERN_ALERT "DEBUG CLIENT: Validated counter and signature! (counter: %llu , %llu)\n", ecdsa_data.beacon_counter, bss->beacon_counter);
+
+		//end = ktime_get_ns();	
+		//difference = end - start;
+		//printk(KERN_DEBUG "DEBUG Client: T %llu\n", difference);
+	}
+	
+//#endif /*CONFIG_PREAUTH_ATTACKS*/
 
 	switch (sdata->vif.type) {
 	case NL80211_IFTYPE_STATION:
@@ -4060,8 +4315,9 @@ static bool ieee80211_accept_frame(struct ieee80211_rx_data *rx)
 		if (ether_addr_equal(sdata->vif.addr, hdr->addr2) ||
 		    ether_addr_equal(sdata->u.ibss.bssid, hdr->addr2))
 			return false;
-		if (ieee80211_is_beacon(hdr->frame_control))
+		if (ieee80211_is_beacon(hdr->frame_control)){
 			return true;
+		}
 		if (!ieee80211_bssid_match(bssid, sdata->u.ibss.bssid))
 			return false;
 		if (!multicast &&
@@ -4122,7 +4378,6 @@ static bool ieee80211_accept_frame(struct ieee80211_rx_data *rx)
 				return true;
 			return ieee80211_is_beacon(hdr->frame_control);
 		}
-
 		if (!ieee80211_has_tods(hdr->frame_control)) {
 			/* ignore data frames to TDLS-peers */
 			if (ieee80211_is_data(hdr->frame_control))
@@ -4133,7 +4388,6 @@ static bool ieee80211_accept_frame(struct ieee80211_rx_data *rx)
 			    !ether_addr_equal(bssid, hdr->addr1))
 				return false;
 		}
-
 		/*
 		 * 802.11-2016 Table 9-26 says that for data frames, A1 must be
 		 * the BSSID - we've checked that already but may have accepted
@@ -4590,7 +4844,6 @@ static bool ieee80211_prepare_and_rx_handle(struct ieee80211_rx_data *rx,
 {
 	struct ieee80211_local *local = rx->local;
 	struct ieee80211_sub_if_data *sdata = rx->sdata;
-
 	rx->skb = skb;
 
 	/* See if we can do fast-rx; if we have to copy we already lost,
@@ -4608,8 +4861,10 @@ static bool ieee80211_prepare_and_rx_handle(struct ieee80211_rx_data *rx,
 			return true;
 	}
 
-	if (!ieee80211_accept_frame(rx))
-		return false;
+	if (!ieee80211_accept_frame(rx)){
+		 return false;
+	} 
+		
 
 	if (!consume) {
 		skb = skb_copy(skb, GFP_ATOMIC);
@@ -4669,6 +4924,7 @@ drop:
 	dev_kfree_skb(skb);
 }
 
+
 /*
  * This is the actual Rx frames handler. as it belongs to Rx path it must
  * be called with rcu_read_lock protection.
@@ -4690,6 +4946,7 @@ static void __ieee80211_rx_handle_packet(struct ieee80211_hw *hw,
 	struct ieee80211_sub_if_data *prev;
 	struct rhlist_head *tmp;
 	int err = 0;
+	
 
 	fc = ((struct ieee80211_hdr *)skb->data)->frame_control;
 	memset(&rx, 0, sizeof(rx));
@@ -4719,6 +4976,7 @@ static void __ieee80211_rx_handle_packet(struct ieee80211_hw *hw,
 	ieee80211_parse_qos(&rx);
 	ieee80211_verify_alignment(&rx);
 
+
 	if (unlikely(ieee80211_is_probe_resp(hdr->frame_control) ||
 		     ieee80211_is_beacon(hdr->frame_control) ||
 		     ieee80211_is_s1g_beacon(hdr->frame_control)))
@@ -4730,6 +4988,7 @@ static void __ieee80211_rx_handle_packet(struct ieee80211_hw *hw,
 		if (pubsta) {
 			rx.sta = container_of(pubsta, struct sta_info, sta);
 			rx.sdata = rx.sta->sdata;
+			//Not here
 			if (ieee80211_prepare_and_rx_handle(&rx, skb, true))
 				return;
 			goto out;
@@ -4745,6 +5004,7 @@ static void __ieee80211_rx_handle_packet(struct ieee80211_hw *hw,
 
 			rx.sta = prev_sta;
 			rx.sdata = prev_sta->sdata;
+			//Not here
 			ieee80211_prepare_and_rx_handle(&rx, skb, false);
 
 			prev_sta = sta;
@@ -4753,7 +5013,7 @@ static void __ieee80211_rx_handle_packet(struct ieee80211_hw *hw,
 		if (prev_sta) {
 			rx.sta = prev_sta;
 			rx.sdata = prev_sta->sdata;
-
+			//Not here
 			if (ieee80211_prepare_and_rx_handle(&rx, skb, true))
 				return;
 			goto out;
@@ -4783,6 +5043,7 @@ static void __ieee80211_rx_handle_packet(struct ieee80211_hw *hw,
 
 		rx.sta = sta_info_get_bss(prev, hdr->addr2);
 		rx.sdata = prev;
+		//Here
 		ieee80211_prepare_and_rx_handle(&rx, skb, false);
 
 		prev = sdata;
@@ -4791,7 +5052,7 @@ static void __ieee80211_rx_handle_packet(struct ieee80211_hw *hw,
 	if (prev) {
 		rx.sta = sta_info_get_bss(prev, hdr->addr2);
 		rx.sdata = prev;
-
+		//Here
 		if (ieee80211_prepare_and_rx_handle(&rx, skb, true))
 			return;
 	}
@@ -4939,7 +5200,6 @@ void ieee80211_rx_napi(struct ieee80211_hw *hw, struct ieee80211_sta *pubsta,
 
 	__skb_queue_head_init(&list);
 #endif
-
 
 	/*
 	 * key references and virtual interfaces are protected using RCU

@@ -3139,6 +3139,14 @@ static int wpa_parse_generic(const u8 *pos, struct wpa_eapol_ie_parse *ie)
 }
 
 
+void wpa_parse_beacon_cntr(const u8 *pos, struct wpa_eapol_ie_parse *ie) {
+    const u8* counter_pos = pos + 3; //ID - Length Extended - ID
+    u64 counter = 0;
+    //Copy 48 bit counter
+    memcpy(((u8*)&counter) + 2, counter_pos, 6);
+    ie->beacon_cntr = bswap_64(counter);
+}
+
 /**
  * wpa_parse_kde_ies - Parse EAPOL-Key Key Data IEs
  * @buf: Pointer to the Key Data buffer
@@ -3266,7 +3274,15 @@ int wpa_parse_kde_ies(const u8 *buf, size_t len, struct wpa_eapol_ie_parse *ie)
 			}
 
 			ret = 0;
-		} else {
+		}
+#ifdef  CONFIG_PREAUTH_ATTACKS
+        else if (*pos == WLAN_EID_EXTENSION &&
+                 pos[1] == 7 &&
+                 pos[2] == 94) {
+            wpa_parse_beacon_cntr(pos,ie);
+        }
+#endif  /* CONFIG_PREAUTH_ATTACKS */
+        else {
 			wpa_hexdump(MSG_DEBUG,
 				    "WPA: Unrecognized EAPOL-Key Key Data IE",
 				    pos, 2 + pos[1]);

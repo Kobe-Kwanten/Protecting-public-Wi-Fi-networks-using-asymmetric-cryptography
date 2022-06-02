@@ -92,6 +92,10 @@ struct wpa_sm_ctx {
 	void (*transition_disable)(void *ctx, u8 bitmap);
 	void (*store_ptk)(void *ctx, u8 *addr, int cipher,
 			  u32 life_time, const struct wpa_ptk *ptk);
+#ifdef CONFIG_PREAUTH_ATTACKS
+    void (*set_beacon_cntr)(void *ctx, u64 counter);
+#endif /* CONFIG_PREAUTH_ATTACKS */
+
 };
 
 
